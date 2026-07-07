@@ -55,6 +55,35 @@
   @keyframes reveal { 0% { transform: scale(.6); opacity: .2; } 60% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
   #draw .draw-prev { font-size: 2vw; opacity: .65; margin-top: 3vh; }
 
+  #cashking {
+    position: absolute; inset: 0; display: none; flex-direction: column; z-index: 80;
+    background: radial-gradient(ellipse at top, #14532d 0%, #052012 70%);
+    padding: 2vh 2vw; box-sizing: border-box;
+  }
+  #ck-head { display: flex; align-items: baseline; gap: 2vw; margin-bottom: 1.5vh; }
+  #ck-name { font-size: 3vw; font-weight: 800; letter-spacing: .12em; }
+  #ck-jackpot { font-size: 4.2vw; font-weight: 800; color: #fbbf24; font-variant-numeric: tabular-nums; margin-left: auto; }
+  #ck-sub { font-size: 1.6vw; opacity: .8; }
+  #ck-board { flex: 1; display: grid; grid-template-columns: repeat(9, 1fr); gap: .6vw; align-content: stretch; }
+  .ck-card {
+    border-radius: .5vw; display: flex; align-items: center; justify-content: center;
+    font-weight: 800; position: relative; min-height: 0;
+  }
+  .ck-card.down { background: linear-gradient(135deg, #1d4ed8, #172554); border: .12vw solid #3b82f6aa; color: #93c5fd; font-size: 1.5vw; }
+  .ck-card.up { background: #f8fafc; color: #0f172a; font-size: 2vw; border: .12vw solid #cbd5e1; opacity: .55; }
+  .ck-card.up.red { color: #dc2626; }
+  .ck-card.up.joker { background: linear-gradient(135deg, #fbbf24, #b45309); color: #451a03; opacity: 1; }
+  .ck-card.fresh { animation: ckflip .9s ease; opacity: 1; box-shadow: 0 0 2vw #fbbf24aa; z-index: 2; }
+  @keyframes ckflip { 0% { transform: rotateY(90deg) scale(1.6); } 60% { transform: rotateY(0) scale(1.35); } 100% { transform: scale(1); } }
+  #ck-banner { text-align: center; font-size: 2.2vw; min-height: 3.2vw; padding-top: 1vh; font-weight: 700; }
+  #ck-won {
+    position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; background: radial-gradient(ellipse at center, #b45309 0%, #451a03 80%); z-index: 5;
+  }
+  #ck-won .t1 { font-size: 8vw; font-weight: 900; }
+  #ck-won .t2 { font-size: 12vw; font-weight: 900; color: #fde68a; font-variant-numeric: tabular-nums; }
+  #ck-won .t3 { font-size: 3vw; opacity: .9; }
+
   #status {
     position: absolute; right: 1vw; bottom: 1vh; z-index: 50;
     font-size: 12px; opacity: .35; font-variant-numeric: tabular-nums;
@@ -87,6 +116,21 @@
     <div class="brand">KORVIX SIGNAGE</div>
     <div style="font-size:3vw" id="standby-name">Screen paired</div>
     <div class="hint" id="standby-hint">No content scheduled for this screen right now.</div>
+  </div>
+
+  <div id="cashking">
+    <div id="ck-head">
+      <div id="ck-name"></div>
+      <div id="ck-sub"></div>
+      <div id="ck-jackpot"></div>
+    </div>
+    <div id="ck-board"></div>
+    <div id="ck-banner"></div>
+    <div id="ck-won">
+      <div class="t1">🃏 JOKER FOUND!</div>
+      <div class="t2" id="ck-won-amount"></div>
+      <div class="t3" id="ck-won-sub"></div>
+    </div>
   </div>
 
   <div id="draw">

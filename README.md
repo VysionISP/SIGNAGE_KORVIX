@@ -112,6 +112,20 @@ npm test           # end-to-end smoke tests (boots a real server)
   a spinning number and reveal the winner. Draw again for "winner not
   present" — a number is never repeated within a draw. Clearing returns
   screens to scheduled content.
+- **CashKing — digital card game (Jag the Joker).** A cryptographically
+  shuffled board of 53 cards (52 + Joker) shown live on every screen in the
+  venue. One card revealed per game night: a miss rolls the jackpot up by
+  your configured increment, the Joker wins it, with a full-screen
+  celebration. Custom starting jackpot and increment, flexible game nights
+  (free-text schedule shown on screens plus the normal dayparting for the
+  promo widget), and card faces never leave the server until revealed — the
+  board can't be sniffed. Run it from the dashboard or the staff phone app.
+  *Automated promotion:* a `cashking` playlist widget shows the live jackpot
+  between game nights, a public no-auth JSON feed
+  (`/api/public/cashking/<token>`) powers website embeds, and an optional
+  marketing webhook fires a ready-to-post blurb on every event (new game,
+  go-live, jackpot roll-up, win) — point it at Zapier/Make to hit socials
+  and email automatically.
 - **Staff remote app (`/remote/`).** An installable PWA so bar staff run
   draws from their phone with no dashboard access. From Dashboard → Draws,
   generate the staff link and send it to staff; opening it on Android
@@ -135,7 +149,7 @@ npm test           # end-to-end smoke tests (boots a real server)
 | `video`  | Full-screen muted video; advances when it ends                     |
 | `url`    | Any live web page in a sandboxed iframe                            |
 | `html`   | An inline HTML slide stored in the CMS (no assets needed)          |
-| `widget` | Built-in live-data renderer: `jackpot`, `menu`, `weather`, `sports`, `birthdays`, `happyhour`, `welcome` |
+| `widget` | Built-in live-data renderer: `jackpot`, `menu`, `weather`, `sports`, `birthdays`, `happyhour`, `cashking`, `welcome` |
 
 ## API sketch
 
@@ -181,6 +195,15 @@ POST /api/venues/:id/draws                { name, range_start, range_end, zone_i
 POST /api/draws/:id/draw                  spin: picks an undrawn number, screens take over
 POST /api/draws/:id/clear                 return screens to scheduled content
 GET  /api/venues/:id/draws                draw history with drawn numbers
+
+# CashKing digital card game
+GET  /api/venues/:id/card-games           games with board state (faces hidden until revealed)
+POST /api/venues/:id/card-games           { name, jackpot_start, jackpot_increment, session_text, promo_webhook? }
+POST /api/card-games/:id/live             board takeover on every venue screen
+POST /api/card-games/:id/pick             { index, picked_by? } — miss rolls jackpot, Joker wins
+POST /api/card-games/:id/end-session      screens back to scheduled content
+POST /api/card-games/:id/archive | PATCH /api/card-games/:id
+GET  /api/public/cashking/:token          public promo JSON (no auth — website embeds)
 
 # Staff remote (phone app; token-authed, no admin login)
 POST /api/venues/:id/remote-token         generate/rotate the staff link (rotation revokes old)

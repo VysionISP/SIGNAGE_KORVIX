@@ -173,7 +173,7 @@
       overview: renderOverview, screens: renderScreens, content: renderContent,
       playlists: renderPlaylists, schedules: renderSchedules, draws: renderDraws,
       emergency: renderEmergency, integrations: renderIntegrations, reports: renderReports,
-      users: renderUsers, orgs: renderOrgs,
+      users: renderUsers, orgs: renderOrgs, cashking: renderCashKing,
     };
     await renderers[activeTab]();
     await renderBanner();
@@ -779,6 +779,137 @@
           render();
         }
       }
+    };
+  }
+
+  // ---- CashKing (digital Jag the Joker) -------------------------------------------------
+
+  const moneyAud = (n) => '$' + Number(n).toLocaleString('en-AU', { maximumFractionDigits: 2 });
+  const CK_SUITS = { S: '♠', H: '♥', D: '♦', C: '♣' };
+  const ckFace = (c) => c === 'JOKER' ? '🃏' : c.slice(0, -1) + (CK_SUITS[c.slice(-1)] || '');
+
+  function ckBoardHtml(game, clickable) {
+    return `<div style="display:grid;grid-template-columns:repeat(9,1fr);gap:4px;margin:12px 0">
+      ${game.cards.map((c) => {
+        if (!c.revealed) {
+          return clickable && game.status === 'active'
+            ? `<button data-pick="${c.i}" title="Reveal card #${c.i + 1}" style="aspect-ratio:2/2.6;border-radius:5px;border:1px solid #3b82f6aa;background:linear-gradient(135deg,#1d4ed8,#172554);color:#93c5fd;font-weight:700;cursor:pointer">${c.i + 1}</button>`
+            : `<div style="aspect-ratio:2/2.6;border-radius:5px;border:1px solid #3b82f6aa;background:linear-gradient(135deg,#1d4ed8,#172554);color:#93c5fd;font-weight:700;display:flex;align-items:center;justify-content:center">${c.i + 1}</div>`;
+        }
+        const red = c.card && 'HD'.includes(c.card.slice(-1));
+        const joker = c.card === 'JOKER';
+        return `<div style="aspect-ratio:2/2.6;border-radius:5px;display:flex;align-items:center;justify-content:center;font-weight:800;
+          ${joker ? 'background:linear-gradient(135deg,#fbbf24,#b45309);color:#451a03'
+            : `background:#f8fafc;color:${red ? '#dc2626' : '#0f172a'};opacity:.6`}">${ckFace(c.card)}</div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  async function renderCashKing() {
+    const { games } = await api('GET', `/api/venues/${venueId}/card-games`);
+    const current = games.find((g) => g.status !== 'archived');
+    const past = games.filter((g) => g !== current);
+
+    $('#tab-cashking').innerHTML = `
+      <h2>CashKing 🃏 <span class="muted" style="font-weight:400;font-size:13px">digital Jag the Joker</span></h2>
+      <p class="muted">53 shuffled cards on every screen in the venue. One card revealed per game night —
+      a miss rolls the jackpot up by your increment, the Joker wins it. Card faces stay on the server until
+      revealed, so the board can't be cheated. Staff can run the whole game from the phone app.</p>
+
+      ${current ? `
+      <div class="card">
+        <div class="row">
+          <h3 style="margin:0">${esc(current.name)}</h3>
+          <span class="pill ${current.won ? 'level-alert unpaired' : current.live ? 'online' : 'level-notice'}">${current.won ? 'WON' : current.live ? 'LIVE ON SCREENS' : 'idle'}</span>
+          <span class="muted">${current.cards_left} cards left${current.session_text ? ` · ${esc(current.session_text)}` : ''}</span>
+          <div class="spacer"></div>
+          <div style="font-size:24px;font-weight:800;color:var(--warn)">${moneyAud(current.jackpot)}</div>
+        </div>
+        ${current.won ? `<p style="color:var(--warn);font-weight:700">🎉 Joker found — ${moneyAud(current.jackpot)} won! Archive this game to start a new one.</p>` : ''}
+        ${ckBoardHtml(current, true)}
+        <div class="row">
+          ${current.live
+            ? '<button class="btn danger" data-ck="end">End session — screens back to normal</button>'
+            : `<button class="btn" data-ck="live">🔴 GO LIVE — show board on all screens</button>`}
+          <button class="btn small secondary" data-ck="edit">Edit jackpot / schedule / webhook</button>
+          <button class="btn small secondary" data-ck="archive">Archive game</button>
+        </div>
+        <p class="muted" style="margin-bottom:0">Click a face-down card to reveal it (the winner's pick).
+        Increment per miss: ${moneyAud(current.jackpot_increment)}.</p>
+        <h2 style="font-size:14px">Automated promotion</h2>
+        <div class="muted" style="font-size:13px">
+          Public JSON feed for your website / socials tooling:<br>
+          <code style="user-select:all">${location.origin}/api/public/cashking/${esc(current.public_token)}</code><br>
+          Marketing webhook ${current.promo_webhook ? `(set): <code>${esc(current.promo_webhook)}</code>` : '(not set)'} —
+          fired with a ready-to-post blurb on every game event: new game, go-live, jackpot roll-up, win.
+        </div>
+      </div>` : `
+      <h2>Start a game</h2>
+      <div class="card">
+        <div class="form-grid">
+          <label>Game name<input id="ck-name" value="CashKing"></label>
+          <label>Starting jackpot $<input id="ck-start" type="number" value="1000" min="0"></label>
+          <label>Increment per miss $<input id="ck-inc" type="number" value="150" min="0"></label>
+          <label>Game nights (shown on screens)<input id="ck-session" placeholder="Thursdays 7:30pm"></label>
+        </div>
+        <label style="display:block;font-size:12px;color:var(--muted)">Marketing webhook URL (optional — Zapier/Make/Slack etc.)
+          <input id="ck-hook" placeholder="https://hooks.zapier.com/…" style="width:100%;margin-top:4px"></label>
+        <button class="btn" id="ck-create" style="margin-top:12px">Shuffle deck &amp; start game</button>
+      </div>`}
+
+      ${past.length ? `<h2>Past games</h2>
+      <table><tbody>${past.map((g) => `
+        <tr><td>${esc(g.name)}</td>
+          <td><span class="pill ${g.won ? 'unpaired' : 'never-connected'}">${g.won ? 'won' : g.status}</span></td>
+          <td class="muted">${g.won ? `${moneyAud(g.jackpot)} won ${g.won_at ? new Date(g.won_at).toLocaleDateString() : ''}` : `reached ${moneyAud(g.jackpot)}`}</td>
+          <td class="muted">${53 - g.cards_left} cards revealed</td></tr>`).join('')}
+      </tbody></table>` : ''}`;
+
+    const createBtn = $('#ck-create');
+    if (createBtn) createBtn.onclick = async () => {
+      await api('POST', `/api/venues/${venueId}/card-games`, {
+        name: $('#ck-name').value.trim() || 'CashKing',
+        jackpot_start: parseFloat($('#ck-start').value) || 0,
+        jackpot_increment: parseFloat($('#ck-inc').value) || 0,
+        session_text: $('#ck-session').value.trim(),
+        promo_webhook: $('#ck-hook').value.trim(),
+      });
+      render();
+    };
+
+    $('#tab-cashking').onclick = async (e) => {
+      const pick = e.target.closest('[data-pick]');
+      if (pick && current) {
+        const n = parseInt(pick.dataset.pick, 10);
+        if (!confirm(`Reveal card #${n + 1} on all screens?`)) return;
+        const result = await api('POST', `/api/card-games/${current.id}/pick`, { index: n });
+        if (result.was_joker) alert(`🎉 THE JOKER! ${moneyAud(result.jackpot)} WON!`);
+        return render();
+      }
+      const act = e.target.closest('[data-ck]');
+      if (!act || !current) return;
+      if (act.dataset.ck === 'live') {
+        await api('POST', `/api/card-games/${current.id}/live`);
+      } else if (act.dataset.ck === 'end') {
+        await api('POST', `/api/card-games/${current.id}/end-session`);
+      } else if (act.dataset.ck === 'archive') {
+        if (!confirm('Archive this game? It disappears from screens and the public feed.')) return;
+        await api('POST', `/api/card-games/${current.id}/archive`);
+      } else if (act.dataset.ck === 'edit') {
+        const jackpot = prompt('Current jackpot $:', current.jackpot);
+        if (jackpot === null) return;
+        const increment = prompt('Increment per miss $:', current.jackpot_increment);
+        if (increment === null) return;
+        const session = prompt('Game nights text:', current.session_text);
+        if (session === null) return;
+        const hook = prompt('Marketing webhook URL (blank = off):', current.promo_webhook || '');
+        if (hook === null) return;
+        await api('PATCH', `/api/card-games/${current.id}`, {
+          jackpot_current: parseFloat(jackpot), jackpot_increment: parseFloat(increment),
+          session_text: session.trim(), promo_webhook: hook.trim(),
+        });
+      }
+      render();
     };
   }
 

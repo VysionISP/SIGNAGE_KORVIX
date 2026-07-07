@@ -163,6 +163,27 @@ CREATE TABLE IF NOT EXISTS draws (
   drawn_at TEXT
 );
 
+-- CashKing: digital "Jag the Joker" card game. 53 shuffled cards (52 + Joker)
+-- revealed one per game night; jackpot increments on every miss until the
+-- Joker is found. Card faces stay server-side until revealed.
+CREATE TABLE IF NOT EXISTS card_games (
+  id TEXT PRIMARY KEY,
+  venue_id TEXT NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT 'CashKing',
+  status TEXT NOT NULL DEFAULT 'active',   -- active | won | archived
+  live INTEGER NOT NULL DEFAULT 0,         -- 1 = board takeover on all venue screens
+  deck TEXT NOT NULL,                      -- JSON [{c:'AS', r:revealed_at|null, by:name|null}, ...]
+  jackpot_start REAL NOT NULL DEFAULT 1000,
+  jackpot_increment REAL NOT NULL DEFAULT 100,
+  jackpot_current REAL NOT NULL DEFAULT 1000,
+  session_text TEXT NOT NULL DEFAULT '',   -- e.g. 'Thursdays 7:30pm'
+  promo_webhook TEXT NOT NULL DEFAULT '',  -- marketing webhook fired on every game event
+  public_token TEXT NOT NULL,              -- for the no-auth website/embed JSON feed
+  last_pick TEXT,                          -- JSON {index, card, was_joker, by, at}
+  created_at TEXT NOT NULL,
+  won_at TEXT
+);
+
 -- Proof-of-play: one row per content item actually shown on a screen.
 -- Powers reporting for venue promos and the cross-venue advertising network.
 CREATE TABLE IF NOT EXISTS plays (

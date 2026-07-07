@@ -17,6 +17,7 @@ const playerRoutes = require('./routes/player').routes;
 const integrationRoutes = require('./routes/integrations').routes;
 const remoteRoutes = require('./routes/remote').routes;
 const authRoutes = require('./routes/auth').routes;
+const cardGameRoutes = require('./routes/cardgames').routes;
 
 const PORT = parseInt(process.env.PORT, 10) || 4700;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -43,7 +44,7 @@ const MIME = {
 
 // ---- routing --------------------------------------------------------------
 
-const allRoutes = [...adminRoutes, ...playerRoutes, ...integrationRoutes, ...remoteRoutes, ...authRoutes];
+const allRoutes = [...adminRoutes, ...playerRoutes, ...integrationRoutes, ...remoteRoutes, ...authRoutes, ...cardGameRoutes];
 
 function compile(pattern) {
   const names = [];
@@ -72,7 +73,7 @@ function matchRoute(method, pathname) {
 // auth bootstrap endpoints must be reachable before any session exists.
 // Everything else under /api requires a logged-in user (or the legacy env
 // token, which acts as a superadmin API key).
-const OPEN_PREFIXES = ['/api/player/', '/api/integrations/', '/api/remote/'];
+const OPEN_PREFIXES = ['/api/player/', '/api/integrations/', '/api/remote/', '/api/public/'];
 const OPEN_PATHS = new Set(['/api/auth/state', '/api/auth/login', '/api/auth/setup']);
 
 function isOpenApi(pathname) {

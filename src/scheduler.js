@@ -8,6 +8,7 @@
 //   3. No match -> the player shows its standby card.
 
 const db = require('./db');
+const cashking = require('./cardgame');
 
 // Venue-local weekday (0=Sun..6=Sat) and minutes since midnight.
 function venueClock(timezone, date = new Date()) {
@@ -131,6 +132,7 @@ function buildManifest(screen) {
   const zone = screen.zone_id ? db.get('SELECT * FROM zones WHERE id = ?', screen.zone_id) : null;
   const emergency = activeEmergency(screen.venue_id);
   const draw = activeDraw(screen);
+  const game = cashking.currentGame(screen.venue_id);
   const schedule = resolveSchedule(screen);
   const playlist = schedule
     ? db.get('SELECT * FROM playlists WHERE id = ?', schedule.playlist_id)
@@ -159,6 +161,10 @@ function buildManifest(screen) {
       title: emergency.title,
       message: emergency.message,
     },
+    // Live board takes over every venue screen; the promo view feeds the
+    // 'cashking' playlist widget between game nights.
+    card_game: game && game.live ? cashking.boardView(game) : null,
+    card_game_promo: game ? cashking.promoView(game, venue.name) : null,
     draw: draw && (() => {
       let numbers = [];
       try { numbers = JSON.parse(draw.drawn_numbers); } catch { /* ignore */ }

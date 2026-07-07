@@ -155,6 +155,7 @@
     renderRotation();
     renderEmergency();
     renderDraw();
+    renderCashKing();
 
     const items = playableItems();
     if (!items.length) {
@@ -316,6 +317,22 @@
           `<h1>On The Big Screens</h1><table>${rows || '<tr><td style="opacity:.7">Awaiting sports feed…</td></tr>'}</table>`,
           '#101827,#1e3a5f');
       }
+      case 'cashking': {
+        const promo = manifest.card_game_promo;
+        if (!promo) {
+          return widgetShell('CASHKING', '<h1>🃏 CashKing</h1><div style="opacity:.7;font-size:2.5vw">Coming soon to this venue</div>', '#14532d,#052012');
+        }
+        if (promo.status === 'won') {
+          return widgetShell('🃏 ' + esc(promo.name.toUpperCase()),
+            `<h1>WON! ${moneyAud(promo.jackpot)}</h1><div style="font-size:2.6vw;opacity:.9">The Joker has been found — new game starting soon!</div>`,
+            '#78350f,#451a03');
+        }
+        return widgetShell('🃏 ' + esc(promo.name.toUpperCase()) + ' JACKPOT',
+          `<div class="big">${moneyAud(promo.jackpot)}</div>` +
+          `<div style="font-size:2.6vw;margin-top:1vh">${promo.cards_left} cards left — could be the Joker!</div>` +
+          (promo.session_text ? `<div style="font-size:2.2vw;opacity:.85;margin-top:1.5vh">${esc(promo.session_text)}</div>` : ''),
+          '#14532d,#052012');
+      }
       case 'birthdays': {
         const members = (feeds.membership && feeds.membership.birthdays) || [];
         if (!members.length) {
@@ -417,6 +434,53 @@
       }
       el.textContent = draw.range_start + Math.floor(Math.random() * span);
     }, 60);
+  }
+
+  // ---- CashKing live board takeover ----------------------------------------------
+
+  const moneyAud = (n) => '$' + Number(n).toLocaleString('en-AU', { maximumFractionDigits: 2 });
+  const SUIT_GLYPH = { S: '♠', H: '♥', D: '♦', C: '♣' };
+  let lastCkPick = null;
+
+  function ckCardFace(code) {
+    if (code === 'JOKER') return '🃏';
+    return code.slice(0, -1) + (SUIT_GLYPH[code.slice(-1)] || '');
+  }
+
+  function renderCashKing() {
+    const overlay = $('cashking');
+    const game = manifest && manifest.card_game;
+    if (!game) {
+      overlay.style.display = 'none';
+      lastCkPick = null;
+      return;
+    }
+    overlay.style.display = 'flex';
+    $('ck-name').textContent = game.name.toUpperCase();
+    $('ck-sub').textContent = `${game.cards_left} cards left · find the Joker` + (game.session_text ? ` · ${game.session_text}` : '');
+    $('ck-jackpot').textContent = moneyAud(game.jackpot);
+
+    const pickKey = game.last_pick ? `${game.last_pick.index}:${game.last_pick.at}` : null;
+    const isFresh = pickKey && pickKey !== lastCkPick;
+    lastCkPick = pickKey;
+
+    $('ck-board').innerHTML = game.cards.map((c) => {
+      if (!c.revealed) return `<div class="ck-card down">${c.i + 1}</div>`;
+      const red = c.card && 'HD'.includes(c.card.slice(-1));
+      const fresh = isFresh && game.last_pick.index === c.i ? ' fresh' : '';
+      return `<div class="ck-card up${red ? ' red' : ''}${c.card === 'JOKER' ? ' joker' : ''}${fresh}">${ckCardFace(c.card)}</div>`;
+    }).join('');
+
+    if (game.won) {
+      $('ck-won').style.display = 'flex';
+      $('ck-won-amount').textContent = moneyAud(game.jackpot);
+      $('ck-won-sub').textContent = `${game.name} at ${manifest.venue.name} — congratulations!`;
+    } else {
+      $('ck-won').style.display = 'none';
+      $('ck-banner').textContent = game.last_pick && isFresh
+        ? `Card #${game.last_pick.index + 1} — no Joker! Jackpot rolls on 🡒 ${moneyAud(game.jackpot)}`
+        : (game.last_pick ? `Last card: #${game.last_pick.index + 1}` : 'Waiting for tonight’s pick…');
+    }
   }
 
   // ---- emergency takeover -------------------------------------------------------

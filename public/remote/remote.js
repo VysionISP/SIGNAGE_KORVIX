@@ -61,9 +61,35 @@
     }
   }
 
+  const moneyAud = (n) => '$' + Number(n).toLocaleString('en-AU', { maximumFractionDigits: 2 });
+  const CK_SUITS = { S: '♠', H: '♥', D: '♦', C: '♣' };
+  const ckFace = (c) => c === 'JOKER' ? '🃏' : c.slice(0, -1) + (CK_SUITS[c.slice(-1)] || '');
+
+  function renderCashKing() {
+    const game = state.card_game;
+    if (!game || game.status === 'archived') { $('cashking').innerHTML = ''; return; }
+    $('cashking').innerHTML = `
+      <div class="card">
+        <h2>🃏 ${esc(game.name)} <span class="pill ${game.live ? 'live' : game.won ? 'cleared' : 'ready'}">${game.won ? 'WON' : game.live ? 'live' : 'idle'}</span></h2>
+        <div class="muted">${game.cards_left} cards left${game.session_text ? ` · ${esc(game.session_text)}` : ''}</div>
+        <div class="number"><div class="n">${moneyAud(game.jackpot)}</div></div>
+        ${game.won ? `<div class="prev" style="font-size:15px">🎉 Joker found — jackpot won!</div>` : ''}
+        ${game.live && !game.won ? '<div class="prev">Tap the winner’s card to reveal it on all screens</div>' : ''}
+        ${game.live ? `<div class="ck-grid">${game.cards.map((c) => {
+          if (!c.revealed) return game.won ? `<div class="rev" style="opacity:.25">${c.i + 1}</div>` : `<button data-ck-pick="${c.i}">${c.i + 1}</button>`;
+          const red = c.card && 'HD'.includes(c.card.slice(-1));
+          return `<div class="rev${red ? ' red' : ''}${c.card === 'JOKER' ? ' joker' : ''}">${ckFace(c.card)}</div>`;
+        }).join('')}</div>` : ''}
+        ${game.live
+          ? '<button class="btn-clear" data-ck="end">End session — screens back to normal</button>'
+          : (game.won ? '' : `<button class="btn-live" data-ck="live">🔴 GO LIVE on all screens</button>`)}
+      </div>`;
+  }
+
   function render() {
     $('venue-name').textContent = state.venue.name;
     $('new-draw-wrap').style.display = 'block';
+    renderCashKing();
 
     const zoneSel = $('nd-zone');
     const current = zoneSel.value;
@@ -92,7 +118,9 @@
   document.body.addEventListener('click', async (e) => {
     const spin = e.target.closest('[data-spin]');
     const clear = e.target.closest('[data-clear]');
-    if (!spin && !clear) return;
+    const ckPick = e.target.closest('[data-ck-pick]');
+    const ckAct = e.target.closest('[data-ck]');
+    if (!spin && !clear && !ckPick && !ckAct) return;
     if (busy) return;
     busy = true;
     try {
@@ -100,8 +128,16 @@
         if (navigator.vibrate) navigator.vibrate(80);
         const updated = await api('POST', `/api/remote/${token}/draws/${spin.dataset.spin}/draw`);
         freshNumbers.add(updated.id);
-      } else {
+      } else if (clear) {
         await api('POST', `/api/remote/${token}/draws/${clear.dataset.clear}/clear`);
+      } else if (ckPick) {
+        const n = parseInt(ckPick.dataset.ckPick, 10);
+        if (!confirm(`Reveal card #${n + 1} on all screens?`)) { busy = false; return; }
+        if (navigator.vibrate) navigator.vibrate(80);
+        const result = await api('POST', `/api/remote/${token}/card-games/${state.card_game.id}/pick`, { index: n });
+        if (result.was_joker && navigator.vibrate) navigator.vibrate([100, 60, 100, 60, 300]);
+      } else if (ckAct) {
+        await api('POST', `/api/remote/${token}/card-games/${state.card_game.id}/${ckAct.dataset.ck === 'live' ? 'live' : 'end-session'}`);
       }
       await load();
     } catch (err) {

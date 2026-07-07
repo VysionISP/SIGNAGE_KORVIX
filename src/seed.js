@@ -88,6 +88,7 @@ function seedDemo() {
     }),
     jackpot: media('Gaming jackpot (live feed)', 'widget', { src: 'jackpot', duration: 12 }),
     birthdays: media('Member birthdays (live feed)', 'widget', { src: 'birthdays', duration: 10 }),
+    cashking: media('CashKing jackpot promo (live)', 'widget', { src: 'cashking', duration: 10 }),
     happyHourCountdown: media('Happy hour countdown (live)', 'widget', { src: 'happyhour', duration: 10 }),
     rgMessage: media('Responsible gambling message', 'html', {
       duration: 8,
@@ -120,8 +121,8 @@ function seedDemo() {
   }
 
   const p = {
-    entrance: playlist('Entrance loop', [m.welcome, m.membership, m.birthdays, m.liveMusic, m.weather, m.functions]),
-    barDay: playlist('Bar — daytime', [m.taps, m.weather, m.happyHourCountdown, m.liveMusic, m.membership]),
+    entrance: playlist('Entrance loop', [m.welcome, m.membership, m.cashking, m.birthdays, m.liveMusic, m.weather, m.functions]),
+    barDay: playlist('Bar — daytime', [m.taps, m.weather, m.happyHourCountdown, m.cashking, m.liveMusic, m.membership]),
     barHappy: playlist('Bar — happy hour', [m.happyHour, m.taps, m.liveMusic]),
     barNight: playlist('Bar — evening', [m.taps, m.liveMusic, m.poker, m.membership]),
     breakfast: playlist('Bistro — breakfast', [m.breakfast, m.weather]),
@@ -191,6 +192,11 @@ function seedDemo() {
     `INSERT INTO draws (id, venue_id, zone_id, name, range_start, range_end, created_at)
      VALUES (?, ?, NULL, ?, 1, 200, ?)`,
     db.id(), venueId, 'Friday Meat Raffle', now);
+
+  require('./cardgame').createGame(venueId, {
+    name: 'CashKing', jackpot_start: 1000, jackpot_increment: 150,
+    session_text: 'Drawn Thursdays 7:30pm — members only',
+  });
 
   db.logEvent('venue.seeded', { venueId, detail: 'The Korvix Tavern demo venue' });
   return venueId;

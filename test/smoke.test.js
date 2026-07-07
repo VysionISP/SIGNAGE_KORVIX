@@ -522,6 +522,110 @@ test('multi-tenancy: businesses are isolated, roles enforced', async (t) => {
   });
 });
 
+test('CashKing digital card game', async (t) => {
+  let venueId, deviceKey, gameId, publicToken;
+
+  await t.test('setup: venue with a paired screen', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'CashKing Test Org' });
+    const venue = await api('POST', '/api/venues', { name: 'CK Tavern', org_id: org.data.id });
+    venueId = venue.data.id;
+    const screen = await api('POST', `/api/venues/${venueId}/screens`, { name: 'Main' });
+    const hello = await api('POST', '/api/player/hello', {}, null);
+    deviceKey = hello.data.device_key;
+    await api('POST', `/api/screens/${screen.data.id}/pair`, { pairing_code: hello.data.pairing_code });
+  });
+
+  await t.test('create game: 53 shuffled cards, faces never leak', async () => {
+    const game = await api('POST', `/api/venues/${venueId}/card-games`, {
+      name: 'CashKing', jackpot_start: 1000, jackpot_increment: 150, session_text: 'Thursdays 7:30pm',
+    });
+    assert.strictEqual(game.status, 201);
+    gameId = game.data.id;
+    publicToken = game.data.public_token;
+    assert.strictEqual(game.data.cards.length, 53);
+    assert.strictEqual(game.data.jackpot, 1000);
+    // No unrevealed card exposes its face
+    assert.ok(game.data.cards.every((c) => !c.revealed && c.card === null));
+
+    // Only one active game at a time
+    const second = await api('POST', `/api/venues/${venueId}/card-games`, { jackpot_start: 1, jackpot_increment: 1 });
+    assert.strictEqual(second.status, 409);
+  });
+
+  await t.test('promo widget data in manifest; board hidden until live', async () => {
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.card_game, null);
+    assert.strictEqual(manifest.data.card_game_promo.jackpot, 1000);
+    assert.strictEqual(manifest.data.card_game_promo.cards_left, 53);
+
+    await api('POST', `/api/card-games/${gameId}/live`);
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.card_game.cards.length, 53);
+    assert.ok(manifest.data.card_game.cards.every((c) => c.card === null));
+  });
+
+  await t.test('picks: misses roll the jackpot, Joker wins, no repicks', async () => {
+    // Pick cards until the Joker turns up; verify jackpot math along the way.
+    let misses = 0;
+    let won = false;
+    for (let i = 0; i < 53 && !won; i++) {
+      const pick = await api('POST', `/api/card-games/${gameId}/pick`, { index: i });
+      assert.strictEqual(pick.status, 200, JSON.stringify(pick.data));
+      if (pick.data.was_joker) {
+        won = true;
+        assert.strictEqual(pick.data.status, 'won');
+        assert.strictEqual(pick.data.jackpot, 1000 + misses * 150);
+        // Repick after win is rejected
+        const after = await api('POST', `/api/card-games/${gameId}/pick`, { index: 52 });
+        assert.strictEqual(after.status, 409);
+      } else {
+        misses++;
+        assert.strictEqual(pick.data.jackpot, 1000 + misses * 150);
+        assert.strictEqual(pick.data.cards[i].revealed, true);
+        assert.notStrictEqual(pick.data.cards[i].card, null);
+        // Same card can't be picked twice
+        const dupe = await api('POST', `/api/card-games/${gameId}/pick`, { index: i });
+        assert.strictEqual(dupe.status, 409);
+      }
+    }
+    assert.ok(won, 'joker must be somewhere in 53 cards');
+
+    // Winner state reaches the screens
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.card_game.won, true);
+  });
+
+  await t.test('public promo feed works without auth; archive hides it', async () => {
+    const feed = await api('GET', `/api/public/cashking/${publicToken}`, undefined, null);
+    assert.strictEqual(feed.status, 200);
+    assert.strictEqual(feed.data.venue, 'CK Tavern');
+    assert.strictEqual(feed.data.status, 'won');
+    assert.ok(feed.data.last_card.was_joker);
+
+    const bogus = await api('GET', '/api/public/cashking/nope', undefined, null);
+    assert.strictEqual(bogus.status, 404);
+
+    await api('POST', `/api/card-games/${gameId}/archive`);
+    const gone = await api('GET', `/api/public/cashking/${publicToken}`, undefined, null);
+    assert.strictEqual(gone.status, 404);
+    // And a new game can now start
+    const fresh = await api('POST', `/api/venues/${venueId}/card-games`, { jackpot_start: 500, jackpot_increment: 50 });
+    assert.strictEqual(fresh.status, 201);
+  });
+
+  await t.test('staff remote can run the game', async () => {
+    const remote = await api('POST', `/api/venues/${venueId}/remote-token`);
+    const stateRes = await api('GET', `/api/remote/${remote.data.token}`, undefined, null);
+    const game = stateRes.data.card_game;
+    assert.strictEqual(game.jackpot, 500);
+    const live = await api('POST', `/api/remote/${remote.data.token}/card-games/${game.id}/live`, {}, null);
+    assert.strictEqual(live.status, 200);
+    const pick = await api('POST', `/api/remote/${remote.data.token}/card-games/${game.id}/pick`, { index: 7 }, null);
+    assert.strictEqual(pick.status, 200);
+    await api('POST', `/api/remote/${remote.data.token}/card-games/${game.id}/end-session`, {}, null);
+  });
+});
+
 test('scheduler time-window helpers', () => {
   const { inWindow, matchDay } = require('../src/scheduler');
   // plain window
