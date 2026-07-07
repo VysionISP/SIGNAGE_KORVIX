@@ -139,7 +139,9 @@
     const prevEmergency = JSON.stringify(manifest && manifest.emergency);
     manifest = next;
     renderStatus();
+    renderRotation();
     renderEmergency();
+    renderDraw();
 
     const items = playableItems();
     if (!items.length) {
@@ -302,6 +304,55 @@
   function widgetShell(kicker, inner, gradient) {
     return `<div class="widget" style="background:linear-gradient(135deg,${gradient})">` +
       `<div class="kicker">${kicker}</div>${inner}</div>`;
+  }
+
+  // ---- physical rotation ----------------------------------------------------------
+
+  function renderRotation() {
+    const rotation = (manifest && manifest.screen && manifest.screen.rotation) || 0;
+    const root = $('root');
+    root.classList.remove('rot90', 'rot180', 'rot270');
+    if (rotation) root.classList.add(`rot${rotation}`);
+  }
+
+  // ---- raffle number draw takeover --------------------------------------------------
+
+  let lastDrawKey = null;
+  let spinTimer = null;
+
+  function renderDraw() {
+    const overlay = $('draw');
+    const draw = manifest && manifest.draw;
+    if (!draw || draw.number == null) {
+      overlay.style.display = 'none';
+      clearInterval(spinTimer);
+      lastDrawKey = null;
+      return;
+    }
+    $('draw-name').textContent = draw.name;
+    $('draw-prev').textContent = draw.previous_numbers && draw.previous_numbers.length
+      ? `Already drawn: ${draw.previous_numbers.join('  ·  ')}` : '';
+    overlay.style.display = 'flex';
+
+    const key = `${draw.id}:${draw.number}:${draw.drawn_at}`;
+    if (key === lastDrawKey) return; // same result, don't re-spin
+    lastDrawKey = key;
+
+    // Spin through random numbers in range for ~4s, then reveal the winner.
+    const el = $('draw-number');
+    el.classList.remove('revealed');
+    clearInterval(spinTimer);
+    const span = draw.range_end - draw.range_start + 1;
+    const startedAt = Date.now();
+    spinTimer = setInterval(() => {
+      if (Date.now() - startedAt >= 4000) {
+        clearInterval(spinTimer);
+        el.textContent = draw.number;
+        el.classList.add('revealed');
+        return;
+      }
+      el.textContent = draw.range_start + Math.floor(Math.random() * span);
+    }, 60);
   }
 
   // ---- emergency takeover -------------------------------------------------------

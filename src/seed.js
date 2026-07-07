@@ -179,6 +179,11 @@ function seedDemo() {
     ],
   });
 
+  db.run(
+    `INSERT INTO draws (id, venue_id, zone_id, name, range_start, range_end, created_at)
+     VALUES (?, ?, NULL, ?, 1, 200, ?)`,
+    db.id(), venueId, 'Friday Meat Raffle', now);
+
   db.logEvent('venue.seeded', { venueId, detail: 'The Korvix Tavern demo venue' });
   return venueId;
 }

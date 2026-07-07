@@ -74,6 +74,17 @@ function activeEmergency(venueId) {
   ) || null;
 }
 
+// Latest live draw targeting this screen (venue-wide, or its zone).
+function activeDraw(screen) {
+  return db.get(
+    `SELECT * FROM draws
+     WHERE venue_id = ? AND status = 'live'
+       AND (zone_id IS NULL OR zone_id = ?)
+     ORDER BY drawn_at DESC LIMIT 1`,
+    screen.venue_id, screen.zone_id ?? '',
+  ) || null;
+}
+
 function resolveSchedule(screen, date = new Date()) {
   const venue = db.get('SELECT * FROM venues WHERE id = ?', screen.venue_id);
   if (!venue) return null;
@@ -118,6 +129,7 @@ function buildManifest(screen) {
   const venue = db.get('SELECT * FROM venues WHERE id = ?', screen.venue_id);
   const zone = screen.zone_id ? db.get('SELECT * FROM zones WHERE id = ?', screen.zone_id) : null;
   const emergency = activeEmergency(screen.venue_id);
+  const draw = activeDraw(screen);
   const schedule = resolveSchedule(screen);
   const playlist = schedule
     ? db.get('SELECT * FROM playlists WHERE id = ?', schedule.playlist_id)
@@ -132,7 +144,12 @@ function buildManifest(screen) {
   return {
     generated_at: db.now(),
     refresh_seconds: 60,
-    screen: { id: screen.id, name: screen.name, orientation: screen.orientation },
+    screen: {
+      id: screen.id,
+      name: screen.name,
+      orientation: screen.orientation,
+      rotation: screen.rotation || 0,
+    },
     venue: { id: venue.id, name: venue.name, timezone: venue.timezone },
     zone: zone ? { id: zone.id, name: zone.name } : null,
     emergency: emergency && {
@@ -141,6 +158,19 @@ function buildManifest(screen) {
       title: emergency.title,
       message: emergency.message,
     },
+    draw: draw && (() => {
+      let numbers = [];
+      try { numbers = JSON.parse(draw.drawn_numbers); } catch { /* ignore */ }
+      return {
+        id: draw.id,
+        name: draw.name,
+        number: numbers[numbers.length - 1] ?? null,
+        previous_numbers: numbers.slice(0, -1),
+        range_start: draw.range_start,
+        range_end: draw.range_end,
+        drawn_at: draw.drawn_at,
+      };
+    })(),
     schedule: schedule && { id: schedule.id, name: schedule.name, ends: schedule.end_time },
     playlist: playlist && {
       id: playlist.id,
@@ -151,4 +181,4 @@ function buildManifest(screen) {
   };
 }
 
-module.exports = { venueClock, inWindow, matchDay, resolveSchedule, buildManifest, activeEmergency, playlistItems };
+module.exports = { venueClock, inWindow, matchDay, resolveSchedule, buildManifest, activeEmergency, activeDraw, playlistItems };

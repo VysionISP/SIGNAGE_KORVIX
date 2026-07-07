@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS screens (
   zone_id TEXT REFERENCES zones(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
   orientation TEXT NOT NULL DEFAULT 'landscape',
+  rotation INTEGER NOT NULL DEFAULT 0, -- degrees the player rotates output: 0|90|180|270
   device_key TEXT UNIQUE,
   last_seen_at TEXT,
   player_info TEXT DEFAULT '{}',
@@ -119,6 +120,21 @@ CREATE TABLE IF NOT EXISTS feeds (
   PRIMARY KEY (venue_id, source)
 );
 
+-- Raffle / promotional number draws. A draw owns a ticket range; each spin
+-- picks an undrawn number and takes over the targeted screens until cleared.
+CREATE TABLE IF NOT EXISTS draws (
+  id TEXT PRIMARY KEY,
+  venue_id TEXT NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  zone_id TEXT REFERENCES zones(id) ON DELETE SET NULL, -- NULL = whole venue
+  name TEXT NOT NULL,
+  range_start INTEGER NOT NULL,
+  range_end INTEGER NOT NULL,
+  drawn_numbers TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'ready',  -- ready | live | cleared
+  created_at TEXT NOT NULL,
+  drawn_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   venue_id TEXT,
@@ -137,7 +153,16 @@ function open() {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  migrate();
   return db;
+}
+
+// Additive column migrations for databases created by earlier versions.
+function migrate() {
+  const screenCols = db.prepare('PRAGMA table_info(screens)').all().map((c) => c.name);
+  if (!screenCols.includes('rotation')) {
+    db.exec('ALTER TABLE screens ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 function get(sql, ...params) { return open().prepare(sql).get(...params); }

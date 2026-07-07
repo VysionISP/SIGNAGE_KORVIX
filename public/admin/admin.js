@@ -93,7 +93,7 @@
     venueId = v.id;
     const renderers = {
       overview: renderOverview, screens: renderScreens, content: renderContent,
-      playlists: renderPlaylists, schedules: renderSchedules,
+      playlists: renderPlaylists, schedules: renderSchedules, draws: renderDraws,
       emergency: renderEmergency, integrations: renderIntegrations,
     };
     await renderers[activeTab]();
@@ -175,11 +175,14 @@
     $('#tab-screens').innerHTML = `
       <h2>Screens</h2>
       <table>
-        <thead><tr><th>Name</th><th>Zone</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Zone</th><th>Rotation</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
         <tbody>${screens.map((s) => `
           <tr>
             <td>${esc(s.name)} <span class="muted">${s.orientation}</span></td>
             <td class="muted">${esc(zoneName(s.zone_id))}</td>
+            <td><select data-rotate="${s.id}">
+              ${[0, 90, 180, 270].map((r) => `<option value="${r}" ${(s.rotation || 0) === r ? 'selected' : ''}>${r}&deg;</option>`).join('')}
+            </select></td>
             <td><span class="pill ${s.status}">${s.status}</span></td>
             <td class="muted">${s.last_seen_at ? new Date(s.last_seen_at).toLocaleString() : '—'}</td>
             <td class="row" style="justify-content:flex-end">
@@ -188,7 +191,7 @@
                 : `<button class="btn small" data-act="pair" data-id="${s.id}">Pair device</button>`}
               <button class="btn small danger" data-act="del-screen" data-id="${s.id}">Delete</button>
             </td>
-          </tr>`).join('') || '<tr><td class="muted" colspan="5">No screens yet</td></tr>'}
+          </tr>`).join('') || '<tr><td class="muted" colspan="6">No screens yet</td></tr>'}
         </tbody>
       </table>
 
@@ -231,6 +234,11 @@
       if (!name) return;
       await api('POST', `/api/venues/${venueId}/zones`, { name });
       await refresh();
+    };
+    $('#tab-screens').onchange = async (e) => {
+      const sel = e.target.closest('[data-rotate]');
+      if (!sel) return;
+      await api('PATCH', `/api/screens/${sel.dataset.rotate}`, { rotation: parseInt(sel.value, 10) });
     };
     $('#tab-screens').onclick = async (e) => {
       const el = e.target.closest('[data-act]');
@@ -475,6 +483,83 @@
       } else if (el.dataset.act === 'toggle') {
         await api('PATCH', `/api/schedules/${el.dataset.id}`, { active: el.dataset.active !== '1' });
         render();
+      }
+    };
+  }
+
+  // ---- raffle number draws ----------------------------------------------------------
+
+  async function renderDraws() {
+    const { draws } = await api('GET', `/api/venues/${venueId}/draws`);
+    const zones = venue().zones || [];
+
+    $('#tab-draws').innerHTML = `
+      <h2>Raffle number draws</h2>
+      <p class="muted">Set up a ticket range, then hit <b>Draw number</b> — targeted screens take over with a spinning number and reveal the winner.
+      Draw again for “winner not present”: a number is never repeated within the same draw. <b>Clear</b> returns screens to normal content.</p>
+
+      <h2>New draw</h2>
+      <div class="form-grid card">
+        <label>Name<input id="dr-name" placeholder="Friday Meat Raffle"></label>
+        <label>First ticket #<input id="dr-start" type="number" value="1"></label>
+        <label>Last ticket #<input id="dr-end" type="number" value="100"></label>
+        <label>Show on<select id="dr-zone">
+          <option value="">Whole venue</option>
+          ${zones.map((z) => `<option value="${z.id}">Zone: ${esc(z.name)}</option>`).join('')}
+        </select></label>
+        <button class="btn" id="dr-add">Create draw</button>
+      </div>
+
+      <h2>Draws</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Range</th><th>Shows on</th><th>Numbers drawn</th><th>Status</th><th></th></tr></thead>
+        <tbody>${draws.map((d) => `
+          <tr>
+            <td>${esc(d.name)}</td>
+            <td class="muted">${d.range_start}–${d.range_end}</td>
+            <td class="muted">${d.zone_name ? `Zone: ${esc(d.zone_name)}` : 'Whole venue'}</td>
+            <td>${d.drawn_numbers.length
+              ? `<b style="font-size:16px">#${d.latest_number}</b>` +
+                (d.drawn_numbers.length > 1 ? ` <span class="muted">(earlier: ${d.drawn_numbers.slice(0, -1).join(', ')})</span>` : '') +
+                ` <span class="muted">· ${d.remaining} left</span>`
+              : '<span class="muted">—</span>'}</td>
+            <td><span class="pill ${d.status === 'live' ? 'online' : d.status === 'ready' ? 'unpaired' : 'never-connected'}">${d.status}</span></td>
+            <td style="text-align:right;white-space:nowrap">
+              <button class="btn small" data-act="spin" data-id="${d.id}" ${d.remaining <= 0 ? 'disabled' : ''}>
+                ${d.drawn_numbers.length ? 'Draw again' : 'Draw number'}</button>
+              ${d.status === 'live' ? `<button class="btn small secondary" data-act="clear" data-id="${d.id}">Clear</button>` : ''}
+              <button class="btn small danger" data-act="del" data-id="${d.id}">✕</button>
+            </td>
+          </tr>`).join('') || '<tr><td class="muted" colspan="6">No draws yet</td></tr>'}
+        </tbody>
+      </table>`;
+
+    $('#dr-add').onclick = async () => {
+      const name = $('#dr-name').value.trim();
+      if (!name) return alert('Draw name required');
+      await api('POST', `/api/venues/${venueId}/draws`, {
+        name,
+        range_start: parseInt($('#dr-start').value, 10),
+        range_end: parseInt($('#dr-end').value, 10),
+        zone_id: $('#dr-zone').value || null,
+      });
+      render();
+    };
+    $('#tab-draws').onclick = async (e) => {
+      const el = e.target.closest('[data-act]');
+      if (!el) return;
+      const { act, id } = el.dataset;
+      if (act === 'spin') {
+        await api('POST', `/api/draws/${id}/draw`);
+        render();
+      } else if (act === 'clear') {
+        await api('POST', `/api/draws/${id}/clear`);
+        render();
+      } else if (act === 'del') {
+        if (confirm('Delete this draw and its history?')) {
+          await api('DELETE', `/api/draws/${id}`);
+          render();
+        }
       }
     };
   }

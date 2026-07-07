@@ -162,6 +162,70 @@ test('full venue lifecycle', async (t) => {
     assert.strictEqual(manifest.data.playlist.name, 'Screen-specific');
   });
 
+  await t.test('screen rotation is stored and delivered to the player', async () => {
+    const bad = await api('PATCH', `/api/screens/${screenId}`, { rotation: 45 });
+    assert.strictEqual(bad.status, 400);
+    const ok = await api('PATCH', `/api/screens/${screenId}`, { rotation: 270 });
+    assert.strictEqual(ok.status, 200);
+    assert.strictEqual(ok.data.rotation, 270);
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.screen.rotation, 270);
+  });
+
+  await t.test('raffle draw lifecycle: create, spin without repeats, clear', async () => {
+    const bad = await api('POST', `/api/venues/${venueId}/draws`, { name: 'Bad', range_start: 10, range_end: 5 });
+    assert.strictEqual(bad.status, 400);
+
+    const draw = await api('POST', `/api/venues/${venueId}/draws`, {
+      name: 'Meat Raffle', range_start: 1, range_end: 3,
+    });
+    assert.strictEqual(draw.status, 201);
+    assert.strictEqual(draw.data.status, 'ready');
+    assert.strictEqual(draw.data.remaining, 3);
+    const drawId = draw.data.id;
+
+    // No takeover before the first spin
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.draw, null);
+
+    // Spin all three: numbers must be unique and within range
+    const seen = new Set();
+    for (let i = 0; i < 3; i++) {
+      const spin = await api('POST', `/api/draws/${drawId}/draw`);
+      assert.strictEqual(spin.status, 200);
+      const n = spin.data.latest_number;
+      assert.ok(n >= 1 && n <= 3, `number ${n} in range`);
+      assert.ok(!seen.has(n), `number ${n} not repeated`);
+      seen.add(n);
+    }
+    const exhausted = await api('POST', `/api/draws/${drawId}/draw`);
+    assert.strictEqual(exhausted.status, 409);
+
+    // Live draw reaches the player with the latest number and history
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.draw.name, 'Meat Raffle');
+    assert.ok(seen.has(manifest.data.draw.number));
+    assert.strictEqual(manifest.data.draw.previous_numbers.length, 2);
+    assert.strictEqual(manifest.data.draw.range_end, 3);
+
+    // Clear returns screens to scheduled content
+    await api('POST', `/api/draws/${drawId}/clear`);
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.draw, null);
+  });
+
+  await t.test('zone-targeted draw only reaches screens in that zone', async () => {
+    const otherZone = await api('POST', `/api/venues/${venueId}/zones`, { name: 'Gaming' });
+    const draw = await api('POST', `/api/venues/${venueId}/draws`, {
+      name: 'Gaming only', range_start: 1, range_end: 50, zone_id: otherZone.data.id,
+    });
+    await api('POST', `/api/draws/${draw.data.id}/draw`);
+    // Our screen is in "Main Bar", not "Gaming" — no takeover
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.draw, null);
+    await api('DELETE', `/api/draws/${draw.data.id}`);
+  });
+
   await t.test('unpair returns player to pending', async () => {
     await api('POST', `/api/screens/${screenId}/unpair`);
     const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);

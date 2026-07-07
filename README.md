@@ -67,6 +67,14 @@ npm test           # end-to-end smoke tests (boots a real server)
   own timezone, so one CMS runs venues in Sydney and Perth correctly.
 - **Health monitoring.** Players heartbeat every 30 s with what they're
   playing; a screen with no heartbeat for 90 s shows offline on the dashboard.
+- **Raffle number draws.** Set up a draw with a ticket range (e.g. 1–200) and
+  hit *Draw number*: targeted screens (whole venue or one zone) take over with
+  a spinning number and reveal the winner. Draw again for "winner not
+  present" — a number is never repeated within a draw. Clearing returns
+  screens to scheduled content.
+- **Screen rotation.** Panels mounted sideways off a landscape-output player
+  box are handled per screen: set 0/90/180/270° in the dashboard and the
+  player rotates its whole output instantly.
 - **Integrations.** External systems (BEPOZ/SwiftPOS/H&L, gaming controllers,
   weather, sports fixtures) POST JSON to per-venue webhook endpoints. Payloads
   are delivered to players inside the manifest, where *widgets* (jackpot
@@ -95,6 +103,7 @@ POST /api/venues                          { name, timezone, address }
 POST /api/venues/:id/zones                { name }
 POST /api/venues/:id/screens              { name, zone_id, orientation }
 POST /api/screens/:id/pair                { pairing_code }  claim a player device
+PATCH /api/screens/:id                    { name?, zone_id?, orientation?, rotation? (0|90|180|270) }
 GET  /api/health/overview                 online/offline counts per venue
 GET  /api/events                          activity log
 
@@ -109,6 +118,12 @@ POST /api/venues/:id/schedules            { playlist_id, zone_id?, screen_id?,
 # Emergency broadcast
 POST /api/emergencies                     { venue_id|null, level, title, message }
 POST /api/emergencies/:id/clear
+
+# Raffle number draws
+POST /api/venues/:id/draws                { name, range_start, range_end, zone_id? }
+POST /api/draws/:id/draw                  spin: picks an undrawn number, screens take over
+POST /api/draws/:id/clear                 return screens to scheduled content
+GET  /api/venues/:id/draws                draw history with drawn numbers
 
 # Player protocol
 POST /api/player/hello                    { device_key? } -> paired | pending+code

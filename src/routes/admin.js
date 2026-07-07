@@ -109,13 +109,21 @@ route('POST', '/api/venues/:venueId/screens', async (req, res, params) => {
   sendJson(res, 201, withStatus(db.get('SELECT * FROM screens WHERE id = ?', screenId)));
 });
 
+const ROTATIONS = new Set([0, 90, 180, 270]);
+
 route('PATCH', '/api/screens/:id', async (req, res, params) => {
   const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
   const body = await readJson(req);
-  db.run('UPDATE screens SET name = ?, zone_id = ?, orientation = ? WHERE id = ?',
+  let rotation = screen.rotation;
+  if (body.rotation !== undefined) {
+    rotation = parseInt(body.rotation, 10);
+    if (!ROTATIONS.has(rotation)) throw new HttpError(400, 'rotation must be 0, 90, 180 or 270');
+  }
+  db.run('UPDATE screens SET name = ?, zone_id = ?, orientation = ?, rotation = ? WHERE id = ?',
     body.name ?? screen.name,
     body.zone_id !== undefined ? (body.zone_id || null) : screen.zone_id,
     body.orientation ?? screen.orientation,
+    rotation,
     screen.id);
   if (screen.device_key) sse.send(screen.device_key, 'refresh', { reason: 'screen-updated' });
   sendJson(res, 200, withStatus(db.get('SELECT * FROM screens WHERE id = ?', screen.id)));
@@ -345,6 +353,95 @@ route('POST', '/api/emergencies/:id/clear', (req, res, params) => {
   db.run('UPDATE emergencies SET active = 0, cleared_at = ? WHERE id = ?', db.now(), emergency.id);
   db.logEvent('emergency.cleared', { venueId: emergency.venue_id, detail: emergency.title });
   if (emergency.venue_id) nudgeVenue(emergency.venue_id); else nudgeAll();
+  sendJson(res, 200, { ok: true });
+});
+
+// ---- Raffle number draws ------------------------------------------------------
+//
+// A draw owns a ticket range (start..end inclusive). Each "spin" picks a random
+// number not drawn before in this draw — so "winner not present, draw again"
+// never repeats a ticket. While live, targeted screens show a full-screen
+// takeover; clearing returns them to scheduled content.
+
+const crypto = require('node:crypto');
+
+function drawnNumbers(draw) {
+  try { return JSON.parse(draw.drawn_numbers); } catch { return []; }
+}
+
+function drawView(draw) {
+  const numbers = drawnNumbers(draw);
+  return {
+    ...draw,
+    drawn_numbers: numbers,
+    latest_number: numbers[numbers.length - 1] ?? null,
+    remaining: (draw.range_end - draw.range_start + 1) - numbers.length,
+  };
+}
+
+route('GET', '/api/venues/:venueId/draws', (req, res, params) => {
+  const draws = db.all(
+    `SELECT d.*, z.name AS zone_name FROM draws d
+     LEFT JOIN zones z ON z.id = d.zone_id
+     WHERE d.venue_id = ? ORDER BY d.created_at DESC LIMIT 100`, params.venueId);
+  sendJson(res, 200, { draws: draws.map(drawView) });
+});
+
+route('POST', '/api/venues/:venueId/draws', async (req, res, params) => {
+  mustFind(db.get('SELECT id FROM venues WHERE id = ?', params.venueId), 'venue');
+  const body = await readJson(req);
+  required(body, 'name');
+  const start = parseInt(body.range_start, 10);
+  const end = parseInt(body.range_end, 10);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end < start) {
+    throw new HttpError(400, 'range_start and range_end must be integers with end >= start');
+  }
+  if (end - start > 1_000_000) throw new HttpError(400, 'range too large (max 1,000,000 tickets)');
+  if (body.zone_id) mustFind(db.get('SELECT id FROM zones WHERE id = ?', body.zone_id), 'zone');
+  const drawId = db.id();
+  db.run(
+    `INSERT INTO draws (id, venue_id, zone_id, name, range_start, range_end, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    drawId, params.venueId, body.zone_id || null, body.name, start, end, db.now());
+  sendJson(res, 201, drawView(db.get('SELECT * FROM draws WHERE id = ?', drawId)));
+});
+
+route('POST', '/api/draws/:id/draw', (req, res, params) => {
+  const draw = mustFind(db.get('SELECT * FROM draws WHERE id = ?', params.id), 'draw');
+  const numbers = drawnNumbers(draw);
+  const total = draw.range_end - draw.range_start + 1;
+  if (numbers.length >= total) {
+    throw new HttpError(409, 'all numbers in this range have been drawn');
+  }
+  // Uniform pick over the undrawn set: index into the remaining slots.
+  const taken = new Set(numbers);
+  let slot = crypto.randomInt(total - numbers.length);
+  let picked = null;
+  for (let n = draw.range_start; n <= draw.range_end; n++) {
+    if (taken.has(n)) continue;
+    if (slot === 0) { picked = n; break; }
+    slot--;
+  }
+  numbers.push(picked);
+  db.run("UPDATE draws SET drawn_numbers = ?, status = 'live', drawn_at = ? WHERE id = ?",
+    JSON.stringify(numbers), db.now(), draw.id);
+  db.logEvent('draw.number', { venueId: draw.venue_id, detail: `${draw.name}: #${picked}` });
+  nudgeVenue(draw.venue_id);
+  sendJson(res, 200, drawView(db.get('SELECT * FROM draws WHERE id = ?', draw.id)));
+});
+
+route('POST', '/api/draws/:id/clear', (req, res, params) => {
+  const draw = mustFind(db.get('SELECT * FROM draws WHERE id = ?', params.id), 'draw');
+  db.run("UPDATE draws SET status = 'cleared' WHERE id = ?", draw.id);
+  db.logEvent('draw.cleared', { venueId: draw.venue_id, detail: draw.name });
+  nudgeVenue(draw.venue_id);
+  sendJson(res, 200, { ok: true });
+});
+
+route('DELETE', '/api/draws/:id', (req, res, params) => {
+  const draw = db.get('SELECT * FROM draws WHERE id = ?', params.id);
+  db.run('DELETE FROM draws WHERE id = ?', params.id);
+  if (draw && draw.status === 'live') nudgeVenue(draw.venue_id);
   sendJson(res, 200, { ok: true });
 });
 
