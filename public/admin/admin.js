@@ -490,10 +490,29 @@
   // ---- raffle number draws ----------------------------------------------------------
 
   async function renderDraws() {
-    const { draws } = await api('GET', `/api/venues/${venueId}/draws`);
+    const [{ draws }, remote] = await Promise.all([
+      api('GET', `/api/venues/${venueId}/draws`),
+      api('GET', `/api/venues/${venueId}/remote-token`),
+    ]);
     const zones = venue().zones || [];
+    const remoteUrl = remote.url ? location.origin + remote.url : null;
 
     $('#tab-draws').innerHTML = `
+      <h2>Staff remote app 📱</h2>
+      <div class="card">
+        <p class="muted" style="margin-top:0">Bar staff run draws from their phone — no dashboard login.
+        Send them this link; opening it in Chrome on Android (or Safari on iPhone) offers
+        <b>Add to Home Screen</b>, which installs it as the <b>Korvix Draws</b> app.
+        Generating a new link instantly cuts off the old one.</p>
+        <div class="row">
+          ${remoteUrl
+            ? `<input readonly id="remote-url" value="${esc(remoteUrl)}" style="flex:1;min-width:280px;font-family:monospace;font-size:12px">
+               <button class="btn small secondary" id="remote-copy">Copy link</button>
+               <button class="btn small secondary" id="remote-rotate">Generate new link (revoke old)</button>`
+            : '<button class="btn" id="remote-rotate">Generate staff app link</button>'}
+        </div>
+      </div>
+
       <h2>Raffle number draws</h2>
       <p class="muted">Set up a ticket range, then hit <b>Draw number</b> — targeted screens take over with a spinning number and reveal the winner.
       Draw again for “winner not present”: a number is never repeated within the same draw. <b>Clear</b> returns screens to normal content.</p>
@@ -533,6 +552,20 @@
           </tr>`).join('') || '<tr><td class="muted" colspan="6">No draws yet</td></tr>'}
         </tbody>
       </table>`;
+
+    $('#remote-rotate').onclick = async () => {
+      if (remoteUrl && !confirm('Generate a new link? Every phone using the current link loses access.')) return;
+      await api('POST', `/api/venues/${venueId}/remote-token`);
+      render();
+    };
+    const copyBtn = $('#remote-copy');
+    if (copyBtn) {
+      copyBtn.onclick = async () => {
+        try { await navigator.clipboard.writeText($('#remote-url').value); copyBtn.textContent = 'Copied ✓'; }
+        catch { $('#remote-url').select(); document.execCommand('copy'); copyBtn.textContent = 'Copied ✓'; }
+        setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1500);
+      };
+    }
 
     $('#dr-add').onclick = async () => {
       const name = $('#dr-name').value.trim();

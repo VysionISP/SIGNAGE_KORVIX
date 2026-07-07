@@ -356,6 +356,27 @@ route('POST', '/api/emergencies/:id/clear', (req, res, params) => {
   sendJson(res, 200, { ok: true });
 });
 
+// ---- Staff remote app access ---------------------------------------------------
+
+const crypto = require('node:crypto');
+
+// Generate (or rotate) the venue's staff-remote token. Rotating instantly
+// revokes every phone holding the old link.
+route('POST', '/api/venues/:id/remote-token', (req, res, params) => {
+  const venue = mustFind(db.get('SELECT * FROM venues WHERE id = ?', params.id), 'venue');
+  const token = crypto.randomBytes(16).toString('hex');
+  db.run('UPDATE venues SET remote_token = ? WHERE id = ?', token, venue.id);
+  db.logEvent('remote.token_rotated', { venueId: venue.id, detail: venue.name });
+  sendJson(res, 200, { token, url: `/remote/?t=${token}` });
+});
+
+route('GET', '/api/venues/:id/remote-token', (req, res, params) => {
+  const venue = mustFind(db.get('SELECT * FROM venues WHERE id = ?', params.id), 'venue');
+  sendJson(res, 200, venue.remote_token
+    ? { token: venue.remote_token, url: `/remote/?t=${venue.remote_token}` }
+    : { token: null, url: null });
+});
+
 // ---- Raffle number draws ------------------------------------------------------
 //
 // A draw owns a ticket range (start..end inclusive). Each "spin" picks a random
@@ -363,21 +384,7 @@ route('POST', '/api/emergencies/:id/clear', (req, res, params) => {
 // never repeats a ticket. While live, targeted screens show a full-screen
 // takeover; clearing returns them to scheduled content.
 
-const crypto = require('node:crypto');
-
-function drawnNumbers(draw) {
-  try { return JSON.parse(draw.drawn_numbers); } catch { return []; }
-}
-
-function drawView(draw) {
-  const numbers = drawnNumbers(draw);
-  return {
-    ...draw,
-    drawn_numbers: numbers,
-    latest_number: numbers[numbers.length - 1] ?? null,
-    remaining: (draw.range_end - draw.range_start + 1) - numbers.length,
-  };
-}
+const { spinDraw, drawView } = require('../draws');
 
 route('GET', '/api/venues/:venueId/draws', (req, res, params) => {
   const draws = db.all(
@@ -408,26 +415,10 @@ route('POST', '/api/venues/:venueId/draws', async (req, res, params) => {
 
 route('POST', '/api/draws/:id/draw', (req, res, params) => {
   const draw = mustFind(db.get('SELECT * FROM draws WHERE id = ?', params.id), 'draw');
-  const numbers = drawnNumbers(draw);
-  const total = draw.range_end - draw.range_start + 1;
-  if (numbers.length >= total) {
-    throw new HttpError(409, 'all numbers in this range have been drawn');
-  }
-  // Uniform pick over the undrawn set: index into the remaining slots.
-  const taken = new Set(numbers);
-  let slot = crypto.randomInt(total - numbers.length);
-  let picked = null;
-  for (let n = draw.range_start; n <= draw.range_end; n++) {
-    if (taken.has(n)) continue;
-    if (slot === 0) { picked = n; break; }
-    slot--;
-  }
-  numbers.push(picked);
-  db.run("UPDATE draws SET drawn_numbers = ?, status = 'live', drawn_at = ? WHERE id = ?",
-    JSON.stringify(numbers), db.now(), draw.id);
-  db.logEvent('draw.number', { venueId: draw.venue_id, detail: `${draw.name}: #${picked}` });
+  const updated = spinDraw(draw);
+  db.logEvent('draw.number', { venueId: draw.venue_id, detail: `${draw.name}: #${drawView(updated).latest_number}` });
   nudgeVenue(draw.venue_id);
-  sendJson(res, 200, drawView(db.get('SELECT * FROM draws WHERE id = ?', draw.id)));
+  sendJson(res, 200, drawView(updated));
 });
 
 route('POST', '/api/draws/:id/clear', (req, res, params) => {

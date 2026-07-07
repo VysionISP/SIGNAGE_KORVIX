@@ -226,6 +226,46 @@ test('full venue lifecycle', async (t) => {
     await api('DELETE', `/api/draws/${draw.data.id}`);
   });
 
+  await t.test('staff remote: token grants draw control, rotation revokes it', async () => {
+    // No token yet
+    const none = await api('GET', `/api/venues/${venueId}/remote-token`);
+    assert.strictEqual(none.data.token, null);
+
+    // Garbage token is rejected
+    const garbage = await api('GET', '/api/remote/deadbeef');
+    assert.strictEqual(garbage.status, 404);
+
+    // Generate and use
+    const gen = await api('POST', `/api/venues/${venueId}/remote-token`);
+    assert.strictEqual(gen.status, 200);
+    const token = gen.data.token;
+    assert.match(token, /^[0-9a-f]{32}$/);
+
+    const home = await api('GET', `/api/remote/${token}`);
+    assert.strictEqual(home.status, 200);
+    assert.strictEqual(home.data.venue.name, 'Test Tavern');
+    assert.ok(Array.isArray(home.data.zones));
+
+    // Full draw lifecycle through the remote
+    const draw = await api('POST', `/api/remote/${token}/draws`, {
+      name: 'Remote Raffle', range_start: 1, range_end: 10,
+    });
+    assert.strictEqual(draw.status, 201);
+    const spin = await api('POST', `/api/remote/${token}/draws/${draw.data.id}/draw`);
+    assert.strictEqual(spin.status, 200);
+    assert.ok(spin.data.latest_number >= 1 && spin.data.latest_number <= 10);
+    const cleared = await api('POST', `/api/remote/${token}/draws/${draw.data.id}/clear`);
+    assert.strictEqual(cleared.status, 200);
+
+    // Rotating the token revokes the old one
+    const rotated = await api('POST', `/api/venues/${venueId}/remote-token`);
+    assert.notStrictEqual(rotated.data.token, token);
+    const revoked = await api('GET', `/api/remote/${token}`);
+    assert.strictEqual(revoked.status, 404);
+    const fresh = await api('GET', `/api/remote/${rotated.data.token}`);
+    assert.strictEqual(fresh.status, 200);
+  });
+
   await t.test('unpair returns player to pending', async () => {
     await api('POST', `/api/screens/${screenId}/unpair`);
     const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);

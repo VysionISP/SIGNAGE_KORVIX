@@ -18,8 +18,9 @@ no build step.**
 npm start          # or: node src/server.js
 ```
 
-- Dashboard: http://localhost:4700/admin/
-- Player:    http://localhost:4700/player/
+- Dashboard:    http://localhost:4700/admin/
+- Player:       http://localhost:4700/player/
+- Staff remote: http://localhost:4700/remote/ (via the tokenized link from Dashboard → Draws)
 
 On first run an empty database is seeded with a full demo venue — **The
 Korvix Tavern** — complete with zones (Entrance, Main Bar, Bistro, Gaming
@@ -72,6 +73,13 @@ npm test           # end-to-end smoke tests (boots a real server)
   a spinning number and reveal the winner. Draw again for "winner not
   present" — a number is never repeated within a draw. Clearing returns
   screens to scheduled content.
+- **Staff remote app (`/remote/`).** An installable PWA so bar staff run
+  draws from their phone with no dashboard access. From Dashboard → Draws,
+  generate the staff link and send it to staff; opening it on Android
+  (Chrome) or iPhone (Safari) offers *Add to Home Screen*, installing it as
+  the **Korvix Draws** app — full-screen, own icon, no app store. It auths
+  by a per-venue token; generating a new link instantly revokes every phone
+  holding the old one.
 - **Screen rotation.** Panels mounted sideways off a landscape-output player
   box are handled per screen: set 0/90/180/270° in the dashboard and the
   player rotates its whole output instantly.
@@ -124,6 +132,13 @@ POST /api/venues/:id/draws                { name, range_start, range_end, zone_i
 POST /api/draws/:id/draw                  spin: picks an undrawn number, screens take over
 POST /api/draws/:id/clear                 return screens to scheduled content
 GET  /api/venues/:id/draws                draw history with drawn numbers
+
+# Staff remote (phone app; token-authed, no admin login)
+POST /api/venues/:id/remote-token         generate/rotate the staff link (rotation revokes old)
+GET  /api/remote/:token                   venue, zones and draws for the app
+POST /api/remote/:token/draws             create a draw from the phone
+POST /api/remote/:token/draws/:id/draw    spin from the phone
+POST /api/remote/:token/draws/:id/clear   clear screens from the phone
 
 # Player protocol
 POST /api/player/hello                    { device_key? } -> paired | pending+code

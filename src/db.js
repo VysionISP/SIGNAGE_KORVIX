@@ -163,6 +163,11 @@ function migrate() {
   if (!screenCols.includes('rotation')) {
     db.exec('ALTER TABLE screens ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0');
   }
+  const venueCols = db.prepare('PRAGMA table_info(venues)').all().map((c) => c.name);
+  if (!venueCols.includes('remote_token')) {
+    // Bearer for the staff remote app; NULL until an admin generates one.
+    db.exec('ALTER TABLE venues ADD COLUMN remote_token TEXT');
+  }
 }
 
 function get(sql, ...params) { return open().prepare(sql).get(...params); }

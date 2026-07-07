@@ -12,6 +12,7 @@ const seedDemo = require('./seed');
 const adminRoutes = require('./routes/admin').routes;
 const playerRoutes = require('./routes/player').routes;
 const integrationRoutes = require('./routes/integrations').routes;
+const remoteRoutes = require('./routes/remote').routes;
 
 const PORT = parseInt(process.env.PORT, 10) || 4700;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -33,12 +34,13 @@ const MIME = {
   '.webm': 'video/webm',
   '.ico': 'image/x-icon',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
   '.woff2': 'font/woff2',
 };
 
 // ---- routing --------------------------------------------------------------
 
-const allRoutes = [...adminRoutes, ...playerRoutes, ...integrationRoutes];
+const allRoutes = [...adminRoutes, ...playerRoutes, ...integrationRoutes, ...remoteRoutes];
 
 function compile(pattern) {
   const names = [];
@@ -69,6 +71,7 @@ function requiresAdminAuth(pathname) {
   if (!pathname.startsWith('/api/')) return false;
   if (pathname.startsWith('/api/player/')) return false;
   if (pathname.startsWith('/api/integrations/')) return false;
+  if (pathname.startsWith('/api/remote/')) return false; // staff remote auths by venue token
   return true;
 }
 
