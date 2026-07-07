@@ -1,0 +1,17 @@
+{
+  "name": "korvix-signage",
+  "version": "0.1.0",
+  "description": "Korvix cloud-managed digital signage platform for hospitality venues (pubs, clubs, hotels)",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

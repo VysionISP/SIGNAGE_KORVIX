@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Korvix Player</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  body { font-family: system-ui, -apple-system, sans-serif; color: #fff; }
+  .layer { position: absolute; inset: 0; opacity: 0; transition: opacity .6s ease; }
+  .layer.visible { opacity: 1; }
+  .layer img, .layer video, .layer iframe { width: 100%; height: 100%; object-fit: cover; border: 0; display: block; }
+  .layer .html-slide { width: 100%; height: 100%; }
+
+  #pairing, #standby {
+    position: absolute; inset: 0; display: none; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: radial-gradient(ellipse at center, #12233a 0%, #060b14 75%);
+  }
+  #pairing .brand, #standby .brand { font-size: 2.2vw; letter-spacing: .5em; opacity: .6; margin-bottom: 2vh; }
+  #pairing .code { font-size: 11vw; font-weight: 700; letter-spacing: .18em; margin: 2vh 0; font-variant-numeric: tabular-nums; }
+  #pairing .hint, #standby .hint { font-size: 1.8vw; opacity: .7; max-width: 60%; line-height: 1.6; }
+
+  #emergency {
+    position: absolute; inset: 0; display: none; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; z-index: 100; padding: 4vw; box-sizing: border-box;
+  }
+  #emergency.evacuation { background: #b91c1c; animation: pulse 1.2s infinite alternate; }
+  #emergency.lockdown { background: #7f1d1d; animation: pulse 1.2s infinite alternate; }
+  #emergency.alert { background: #b45309; }
+  #emergency.notice { background: #1d4ed8; }
+  @keyframes pulse { from { filter: brightness(1); } to { filter: brightness(1.35); } }
+  #emergency .em-level { font-size: 3vw; letter-spacing: .4em; font-weight: 700; opacity: .9; }
+  #emergency .em-title { font-size: 7vw; font-weight: 800; margin: 2vh 0; }
+  #emergency .em-message { font-size: 3vw; line-height: 1.5; max-width: 80%; }
+
+  #status {
+    position: absolute; right: 1vw; bottom: 1vh; z-index: 50;
+    font-size: 12px; opacity: .35; font-variant-numeric: tabular-nums;
+  }
+  #status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; margin-right: 6px; }
+  #status.disconnected .dot { background: #ef4444; }
+
+  .widget { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 4vw; box-sizing: border-box; }
+  .widget .kicker { font-size: 2vw; letter-spacing: .4em; opacity: .75; }
+  .widget h1 { font-size: 5.5vw; margin: .3em 0; }
+  .widget .big { font-size: 9vw; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .widget table { border-collapse: collapse; font-size: 2.4vw; margin-top: 2vh; }
+  .widget td { padding: .35em 1.2em; text-align: left; }
+  .widget td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .widget .strike { text-decoration: line-through; opacity: .5; }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <div id="pairing">
+    <div class="brand">KORVIX SIGNAGE</div>
+    <div style="font-size:2.4vw;opacity:.85">Enter this code in the dashboard to pair this screen</div>
+    <div class="code" id="pairing-code">------</div>
+    <div class="hint">Dashboard &rarr; Screens &rarr; choose a screen &rarr; Pair device</div>
+  </div>
+
+  <div id="standby">
+    <div class="brand">KORVIX SIGNAGE</div>
+    <div style="font-size:3vw" id="standby-name">Screen paired</div>
+    <div class="hint" id="standby-hint">No content scheduled for this screen right now.</div>
+  </div>
+
+  <div id="emergency">
+    <div class="em-level" id="em-level"></div>
+    <div class="em-title" id="em-title"></div>
+    <div class="em-message" id="em-message"></div>
+  </div>
+
+  <div id="status"><span class="dot"></span><span id="status-text"></span></div>
+
+<script src="player.js"></script>
+</body>
+</html>

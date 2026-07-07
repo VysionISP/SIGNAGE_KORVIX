@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Korvix Signage — Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0b1220; --panel: #121c30; --panel2: #182742; --line: #24334f;
+    --text: #e7edf7; --muted: #8fa1bd; --accent: #38bdf8; --good: #22c55e;
+    --bad: #ef4444; --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 10; flex-wrap: wrap;
+  }
+  header .logo { font-weight: 800; letter-spacing: .12em; }
+  header .logo span { color: var(--accent); }
+  header select { min-width: 220px; }
+
+  nav { display: flex; gap: 4px; padding: 8px 20px 0; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  nav button {
+    background: none; border: none; color: var(--muted); padding: 10px 14px;
+    cursor: pointer; font: inherit; border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+  section.tab { display: none; }
+  section.tab.active { display: block; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card h3 { margin: 0 0 8px; font-size: 15px; }
+  .stat { font-size: 26px; font-weight: 700; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  tr:last-child td { border-bottom: none; }
+
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.online { background: #052e16; color: var(--good); }
+  .pill.offline { background: #450a0a; color: var(--bad); }
+  .pill.unpaired, .pill.never-connected { background: #33260a; color: var(--warn); }
+  .pill.level-evacuation, .pill.level-lockdown { background: #450a0a; color: var(--bad); }
+  .pill.level-alert { background: #33260a; color: var(--warn); }
+  .pill.level-notice { background: #0c2740; color: var(--accent); }
+
+  input, select, textarea {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 10px; font: inherit;
+  }
+  textarea { width: 100%; min-height: 90px; font-family: ui-monospace, monospace; font-size: 12px; }
+  button.btn {
+    background: var(--accent); color: #04202e; border: none; border-radius: 6px;
+    padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  button.btn.danger { background: var(--bad); color: #fff; }
+  button.btn.small { padding: 3px 9px; font-size: 12px; font-weight: 500; }
+
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0; align-items: end; }
+  .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+
+  #emergency-banner {
+    display: none; background: #7f1d1d; color: #fff; padding: 10px 20px;
+    font-weight: 700; text-align: center;
+  }
+  .em-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
+  .em-buttons button { padding: 18px; font-size: 15px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; color: #fff; }
+  .em-evacuation { background: #b91c1c; } .em-lockdown { background: #7f1d1d; }
+  .em-alert { background: #b45309; } .em-notice { background: #1d4ed8; }
+
+  pre { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 12px; }
+  h2 { margin: 24px 0 10px; font-size: 17px; }
+  h2:first-child { margin-top: 0; }
+  .spacer { flex: 1; }
+</style>
+</head>
+<body>
+  <div id="emergency-banner"></div>
+  <header>
+    <div class="logo">KORVIX <span>SIGNAGE</span></div>
+    <select id="venue-select"></select>
+    <button class="btn secondary" id="add-venue-btn">+ Venue</button>
+    <div class="spacer"></div>
+    <div class="muted" id="fleet-summary"></div>
+  </header>
+  <nav id="nav">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="screens">Screens</button>
+    <button data-tab="content">Content</button>
+    <button data-tab="playlists">Playlists</button>
+    <button data-tab="schedules">Schedules</button>
+    <button data-tab="emergency">Emergency</button>
+    <button data-tab="integrations">Integrations</button>
+  </nav>
+  <main>
+    <section class="tab active" id="tab-overview"></section>
+    <section class="tab" id="tab-screens"></section>
+    <section class="tab" id="tab-content"></section>
+    <section class="tab" id="tab-playlists"></section>
+    <section class="tab" id="tab-schedules"></section>
+    <section class="tab" id="tab-emergency"></section>
+    <section class="tab" id="tab-integrations"></section>
+  </main>
+<script src="admin.js"></script>
+</body>
+</html>
