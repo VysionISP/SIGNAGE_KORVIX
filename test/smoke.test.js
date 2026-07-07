@@ -335,6 +335,53 @@ test('full venue lifecycle', async (t) => {
     assert.strictEqual(buf.subarray(0, 15).toString(), 'SQLite format 3');
   });
 
+  await t.test('graphics upload lifecycle: upload, use, protect, delete', async () => {
+    // 1x1 transparent PNG
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+    const up = await fetch(base + '/api/upload?name=promo.png', { method: 'POST', body: png });
+    const uploaded = await up.json();
+    assert.strictEqual(up.status, 201);
+    assert.match(uploaded.url, /^\/uploads\/.+promo\.png$/);
+
+    // File is served back with immutable caching
+    const got = await fetch(base + uploaded.url);
+    assert.strictEqual(got.status, 200);
+    assert.strictEqual(Buffer.from(await got.arrayBuffer()).length, png.length);
+    assert.match(got.headers.get('cache-control'), /immutable/);
+
+    // Unsupported extensions are rejected
+    const bad = await fetch(base + '/api/upload?name=hack.exe', { method: 'POST', body: png });
+    assert.strictEqual(bad.status, 400);
+
+    // Create media from the upload with contain fit -> reaches the manifest
+    const graphic = await api('POST', `/api/venues/${venueId}/media`, {
+      name: 'Uploaded promo', type: 'image', src: uploaded.url, fit: 'contain',
+    });
+    assert.strictEqual(graphic.data.fit, 'contain');
+
+    // Uploads list shows usage
+    const list = await api('GET', '/api/uploads');
+    const fileName = uploaded.url.split('/').pop();
+    const entry = list.data.files.find((f) => f.name === fileName);
+    assert.strictEqual(entry.used_by.length, 1);
+    assert.strictEqual(entry.used_by[0].name, 'Uploaded promo');
+
+    // In-use file is protected from deletion unless forced
+    const blocked = await api('DELETE', `/api/uploads/${fileName}`);
+    assert.strictEqual(blocked.status, 409);
+    const forced = await api('DELETE', `/api/uploads/${fileName}?force=1`);
+    assert.strictEqual(forced.status, 200);
+    await api('DELETE', `/api/media/${graphic.data.id}`);
+  });
+
+  await t.test('fit flows through the playlist manifest', async () => {
+    const patched = await api('PATCH', `/api/media/${mediaId}`, { fit: 'contain' });
+    assert.strictEqual(patched.data.fit, 'contain');
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.playlist.items[0].fit, 'contain');
+    await api('PATCH', `/api/media/${mediaId}`, { fit: 'cover' });
+  });
+
   await t.test('unpair returns player to pending', async () => {
     await api('POST', `/api/screens/${screenId}/unpair`);
     const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);

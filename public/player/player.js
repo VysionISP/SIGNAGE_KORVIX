@@ -232,6 +232,7 @@
       case 'image': {
         const img = document.createElement('img');
         img.src = item.src;
+        img.style.objectFit = item.fit === 'contain' ? 'contain' : 'cover';
         img.onerror = () => skipBroken();
         layer.appendChild(img);
         break;
@@ -239,6 +240,7 @@
       case 'video': {
         const video = document.createElement('video');
         video.src = item.src;
+        video.style.objectFit = item.fit === 'contain' ? 'contain' : 'cover';
         video.autoplay = true;
         video.muted = true;
         video.playsInline = true;

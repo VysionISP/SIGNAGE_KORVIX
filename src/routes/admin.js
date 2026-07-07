@@ -180,6 +180,48 @@ route('POST', '/api/screens/:id/unpair', (req, res, params) => {
 // ---- Media library ------------------------------------------------------
 
 const MEDIA_TYPES = new Set(['image', 'video', 'url', 'html', 'widget']);
+const FITS = new Set(['cover', 'contain']);
+const UPLOAD_DIR = path.join(db.DATA_DIR, 'uploads');
+
+// Which media rows reference an uploaded file (by its /uploads/... URL).
+function usedBy(fileName) {
+  return db.all(
+    `SELECT m.id, m.name, v.name AS venue_name FROM media m
+     JOIN venues v ON v.id = m.venue_id WHERE m.src = ?`, `/uploads/${fileName}`);
+}
+
+// List everything venues have uploaded, with usage + disk footprint.
+route('GET', '/api/uploads', (req, res) => {
+  let files = [];
+  try {
+    files = fs.readdirSync(UPLOAD_DIR)
+      .filter((f) => !f.startsWith('.'))
+      .map((f) => {
+        const stat = fs.statSync(path.join(UPLOAD_DIR, f));
+        return {
+          name: f,
+          url: `/uploads/${f}`,
+          bytes: stat.size,
+          uploaded_at: stat.mtime.toISOString(),
+          used_by: usedBy(f),
+        };
+      })
+      .sort((a, b) => b.uploaded_at.localeCompare(a.uploaded_at));
+  } catch { /* no uploads yet */ }
+  sendJson(res, 200, { files, total_bytes: files.reduce((n, f) => n + f.bytes, 0) });
+});
+
+route('DELETE', '/api/uploads/:name', (req, res, params, url) => {
+  const name = path.basename(params.name); // no traversal
+  const file = path.join(UPLOAD_DIR, name);
+  if (!fs.existsSync(file)) throw new HttpError(404, 'file not found');
+  const refs = usedBy(name);
+  if (refs.length && url.searchParams.get('force') !== '1') {
+    throw new HttpError(409, `file is used by: ${refs.map((r) => r.name).join(', ')} — delete that media first or pass force=1`);
+  }
+  fs.unlinkSync(file);
+  sendJson(res, 200, { ok: true });
+});
 
 route('GET', '/api/venues/:venueId/media', (req, res, params) => {
   sendJson(res, 200, { media: db.all('SELECT * FROM media WHERE venue_id = ? ORDER BY created_at DESC', params.venueId) });
@@ -192,9 +234,10 @@ route('POST', '/api/venues/:venueId/media', async (req, res, params) => {
   if (!MEDIA_TYPES.has(body.type)) throw new HttpError(400, `type must be one of: ${[...MEDIA_TYPES].join(', ')}`);
   const mediaId = db.id();
   db.run(
-    'INSERT INTO media (id, venue_id, name, type, src, content, duration_seconds, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO media (id, venue_id, name, type, src, content, duration_seconds, fit, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     mediaId, params.venueId, body.name, body.type, body.src || '', body.content || '',
-    Math.max(1, parseInt(body.duration_seconds, 10) || 10), db.now());
+    Math.max(1, parseInt(body.duration_seconds, 10) || 10),
+    FITS.has(body.fit) ? body.fit : 'cover', db.now());
   sendJson(res, 201, db.get('SELECT * FROM media WHERE id = ?', mediaId));
 });
 
@@ -202,10 +245,12 @@ route('PATCH', '/api/media/:id', async (req, res, params) => {
   const media = mustFind(db.get('SELECT * FROM media WHERE id = ?', params.id), 'media');
   const body = await readJson(req);
   if (body.type && !MEDIA_TYPES.has(body.type)) throw new HttpError(400, 'invalid media type');
-  db.run('UPDATE media SET name = ?, type = ?, src = ?, content = ?, duration_seconds = ? WHERE id = ?',
+  if (body.fit && !FITS.has(body.fit)) throw new HttpError(400, 'fit must be cover or contain');
+  db.run('UPDATE media SET name = ?, type = ?, src = ?, content = ?, duration_seconds = ?, fit = ? WHERE id = ?',
     body.name ?? media.name, body.type ?? media.type, body.src ?? media.src,
     body.content ?? media.content,
     body.duration_seconds ? Math.max(1, parseInt(body.duration_seconds, 10)) : media.duration_seconds,
+    body.fit ?? media.fit,
     media.id);
   nudgeVenue(media.venue_id);
   sendJson(res, 200, db.get('SELECT * FROM media WHERE id = ?', media.id));

@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS media (
   -- html: inline markup rendered full-screen by the player.
   content TEXT DEFAULT '',
   duration_seconds INTEGER NOT NULL DEFAULT 10,
+  -- image/video sizing: cover (fill screen, crop) | contain (letterbox, show all)
+  fit TEXT NOT NULL DEFAULT 'cover',
   created_at TEXT NOT NULL
 );
 
@@ -180,6 +182,10 @@ function migrate() {
   if (!screenCols.includes('alerted')) {
     // 1 while an offline alert is outstanding, so we alert once per outage.
     db.exec('ALTER TABLE screens ADD COLUMN alerted INTEGER NOT NULL DEFAULT 0');
+  }
+  const mediaCols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!mediaCols.includes('fit')) {
+    db.exec("ALTER TABLE media ADD COLUMN fit TEXT NOT NULL DEFAULT 'cover'");
   }
   const venueCols = db.prepare('PRAGMA table_info(venues)').all().map((c) => c.name);
   if (!venueCols.includes('remote_token')) {

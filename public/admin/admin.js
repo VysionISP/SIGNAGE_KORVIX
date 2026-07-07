@@ -268,25 +268,87 @@
 
   // ---- content --------------------------------------------------------------------
 
+  function mediaThumb(m) {
+    if (m.type === 'image') return `<img src="${esc(m.src)}" loading="lazy" style="width:86px;height:52px;object-fit:cover;border-radius:6px;background:#000;display:block">`;
+    if (m.type === 'video') return `<video src="${esc(m.src)}" preload="metadata" muted style="width:86px;height:52px;object-fit:cover;border-radius:6px;background:#000;display:block"></video>`;
+    const icon = { html: '📝', widget: '📊', url: '🌐' }[m.type] || '🖼';
+    return `<div style="width:86px;height:52px;border-radius:6px;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:22px">${icon}</div>`;
+  }
+
+  // Upload files and auto-create a media entry for each. Returns error names.
+  async function uploadGraphics(files) {
+    const failed = [];
+    for (const file of files) {
+      try {
+        const up = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+        const uploaded = await up.json();
+        if (!up.ok) throw new Error(uploaded.error || up.status);
+        const isVideo = /^video\//.test(file.type) || /\.(mp4|webm)$/i.test(file.name);
+        await api('POST', `/api/venues/${venueId}/media`, {
+          name: file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '),
+          type: isVideo ? 'video' : 'image',
+          src: uploaded.url,
+          duration_seconds: isVideo ? 30 : 10,
+        });
+      } catch (err) {
+        failed.push(`${file.name}: ${err.message}`);
+      }
+    }
+    if (failed.length) alert('Some uploads failed:\n' + failed.join('\n'));
+  }
+
   async function renderContent() {
-    const { media } = await api('GET', `/api/venues/${venueId}/media`);
+    const [{ media }, uploads] = await Promise.all([
+      api('GET', `/api/venues/${venueId}/media`),
+      api('GET', '/api/uploads'),
+    ]);
+    const mb = (bytes) => (bytes / 1024 / 1024).toFixed(1) + ' MB';
+
     $('#tab-content').innerHTML = `
+      <h2>Upload your graphics</h2>
+      <div id="dropzone" class="card" style="border:2px dashed var(--line);text-align:center;padding:34px;cursor:pointer">
+        <div style="font-size:32px">🖼️</div>
+        <div style="margin:6px 0"><b>Drag &amp; drop images or videos here</b> — or click to choose files</div>
+        <div class="muted">JPG, PNG, WebP, GIF, SVG, MP4, WebM · up to 200 MB each ·
+        each file becomes a media item ready to add to playlists</div>
+        <input id="dz-input" type="file" accept="image/*,video/*" multiple style="display:none">
+      </div>
+      <div id="dz-progress" class="muted" style="margin:8px 2px"></div>
+
       <h2>Media library</h2>
       <table>
-        <thead><tr><th>Name</th><th>Type</th><th>Source</th><th>Duration</th><th></th></tr></thead>
+        <thead><tr><th></th><th>Name</th><th>Type</th><th>Duration</th><th>Sizing</th><th></th></tr></thead>
         <tbody>${media.map((m) => `
           <tr>
-            <td>${esc(m.name)}</td>
-            <td><span class="pill notice level-notice">${esc(m.type)}</span></td>
-            <td class="muted" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              ${m.type === 'html' ? '(inline slide)' : esc(m.src)}</td>
+            <td style="width:96px">${mediaThumb(m)}</td>
+            <td>${esc(m.name)}<div class="muted" style="font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.type === 'html' ? '(inline slide)' : esc(m.src)}</div></td>
+            <td><span class="pill level-notice">${esc(m.type)}</span></td>
             <td class="muted">${m.duration_seconds}s</td>
+            <td>${m.type === 'image' || m.type === 'video'
+              ? `<button class="btn small secondary" data-fit="${m.id}" data-cur="${m.fit || 'cover'}" title="cover = fill the screen (crops) · contain = show the whole graphic (letterbox)">
+                  ${(m.fit || 'cover') === 'cover' ? '↔ Fill screen' : '▣ Show all'}</button>`
+              : '<span class="muted">—</span>'}</td>
             <td style="text-align:right"><button class="btn small danger" data-del="${m.id}">Delete</button></td>
-          </tr>`).join('') || '<tr><td class="muted" colspan="5">No media yet</td></tr>'}
+          </tr>`).join('') || '<tr><td class="muted" colspan="6">No media yet — drop some graphics above</td></tr>'}
         </tbody>
       </table>
 
-      <h2>Add media</h2>
+      <h2>Uploaded files <span class="muted" style="font-weight:400;font-size:13px">· ${mb(uploads.total_bytes)} on disk</span></h2>
+      <table>
+        <tbody>${uploads.files.map((f) => `
+          <tr>
+            <td><a href="${esc(f.url)}" target="_blank">${esc(f.name)}</a></td>
+            <td class="muted">${mb(f.bytes)}</td>
+            <td class="muted">${new Date(f.uploaded_at).toLocaleString()}</td>
+            <td>${f.used_by.length
+              ? `<span class="pill online">in use: ${esc(f.used_by.map((u) => u.name).join(', ')).slice(0, 60)}</span>`
+              : '<span class="pill never-connected">unused</span>'}</td>
+            <td style="text-align:right"><button class="btn small danger" data-delfile="${esc(f.name)}" data-used="${f.used_by.length}">Delete file</button></td>
+          </tr>`).join('') || '<tr><td class="muted">Nothing uploaded yet</td></tr>'}
+        </tbody>
+      </table>
+
+      <h2>Add media by URL or slide</h2>
       <div class="card">
         <div class="form-grid">
           <label>Name<input id="md-name" placeholder="Happy hour promo"></label>
@@ -327,13 +389,52 @@
       });
       render();
     };
-    $('#tab-content').addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-del]');
-      if (btn && confirm('Delete this media? It is removed from any playlists.')) {
-        await api('DELETE', `/api/media/${btn.dataset.del}`);
-        render();
+    // Drag & drop / click-to-choose upload
+    const dropzone = $('#dropzone');
+    const dzInput = $('#dz-input');
+    const handleFiles = async (files) => {
+      if (!files.length) return;
+      $('#dz-progress').textContent = `Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`;
+      await uploadGraphics([...files]);
+      $('#dz-progress').textContent = '';
+      render();
+    };
+    dropzone.onclick = () => dzInput.click();
+    dzInput.onchange = () => handleFiles(dzInput.files);
+    dropzone.ondragover = (e) => { e.preventDefault(); dropzone.style.borderColor = 'var(--accent)'; };
+    dropzone.ondragleave = () => { dropzone.style.borderColor = 'var(--line)'; };
+    dropzone.ondrop = (e) => {
+      e.preventDefault();
+      dropzone.style.borderColor = 'var(--line)';
+      handleFiles(e.dataTransfer.files);
+    };
+
+    // onclick (not addEventListener) so re-renders don't stack handlers
+    $('#tab-content').onclick = async (e) => {
+      if (e.target.closest('#dropzone')) return; // handled above
+      const del = e.target.closest('[data-del]');
+      if (del && confirm('Delete this media? It is removed from any playlists.')) {
+        await api('DELETE', `/api/media/${del.dataset.del}`);
+        return render();
       }
-    });
+      const fit = e.target.closest('[data-fit]');
+      if (fit) {
+        await api('PATCH', `/api/media/${fit.dataset.fit}`, {
+          fit: fit.dataset.cur === 'cover' ? 'contain' : 'cover',
+        });
+        return render();
+      }
+      const delFile = e.target.closest('[data-delfile]');
+      if (delFile) {
+        const used = delFile.dataset.used !== '0';
+        const msg = used
+          ? 'This file is STILL USED by media items — deleting it will break them. Delete anyway?'
+          : 'Delete this uploaded file from the server?';
+        if (!confirm(msg)) return;
+        await api('DELETE', `/api/uploads/${encodeURIComponent(delFile.dataset.delfile)}?force=${used ? 1 : 0}`);
+        return render();
+      }
+    };
   }
 
   // ---- playlists --------------------------------------------------------------------

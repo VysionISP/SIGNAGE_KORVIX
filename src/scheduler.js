@@ -120,6 +120,7 @@ function playlistItems(playlistId) {
     type: row.type,
     src: row.src,
     content: row.content,
+    fit: row.fit || 'cover',
     duration: row.duration_override ?? row.duration_seconds,
   }));
 }
