@@ -18,6 +18,32 @@ function now() {
 }
 
 const SCHEMA = `
+-- A business (tenant): owns venues and users. Korvix superadmins sit outside
+-- any org (org_id NULL) and see everything.
+CREATE TABLE IF NOT EXISTS orgs (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  org_id TEXT REFERENCES orgs(id) ON DELETE CASCADE, -- NULL = Korvix superadmin
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'editor', -- superadmin | admin | editor | viewer
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS venues (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -196,6 +222,21 @@ function migrate() {
     // Set to enable automatic weather feeds (Open-Meteo, no API key needed).
     db.exec('ALTER TABLE venues ADD COLUMN latitude REAL');
     db.exec('ALTER TABLE venues ADD COLUMN longitude REAL');
+  }
+  if (!venueCols.includes('org_id')) {
+    db.exec('ALTER TABLE venues ADD COLUMN org_id TEXT');
+  }
+  // Any venue without a business (pre-multi-tenant data) gets a default org
+  // so it stays visible and assignable after the upgrade.
+  const orphan = db.prepare('SELECT COUNT(*) AS n FROM venues WHERE org_id IS NULL').get();
+  if (orphan.n > 0) {
+    let org = db.prepare("SELECT id FROM orgs WHERE name = 'Default Business'").get();
+    if (!org) {
+      org = { id: id() };
+      db.prepare('INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)')
+        .run(org.id, 'Default Business', now());
+    }
+    db.prepare('UPDATE venues SET org_id = ? WHERE org_id IS NULL').run(org.id);
   }
 }
 

@@ -12,9 +12,12 @@ function slide(bg, body) {
 
 function seedDemo() {
   const now = db.now();
+  const orgId = db.id();
+  db.run('INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)',
+    orgId, 'Demo Hospitality Group', now);
   const venueId = db.id();
-  db.run('INSERT INTO venues (id, name, timezone, address, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    venueId, 'The Korvix Tavern', 'Australia/Sydney', '42 Demo Street, Sydney NSW', -33.8688, 151.2093, now);
+  db.run('INSERT INTO venues (id, org_id, name, timezone, address, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    venueId, orgId, 'The Korvix Tavern', 'Australia/Sydney', '42 Demo Street, Sydney NSW', -33.8688, 151.2093, now);
 
   const zoneNames = ['Entrance', 'Main Bar', 'Bistro', 'Gaming Room', 'Sports Bar', 'Function Room'];
   const zones = {};

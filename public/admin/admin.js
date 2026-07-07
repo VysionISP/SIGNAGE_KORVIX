@@ -11,13 +11,17 @@
   let venues = [];
   let venueId = localStorage.getItem('korvix.venue') || null;
   let activeTab = 'overview';
+  let me = null; // current user {id, org_id, org_name, email, name, role}
 
-  // ---- API helper (with optional admin token) -------------------------------
+  const ROLE_RANK = { viewer: 1, editor: 2, admin: 3, superadmin: 4 };
+  const hasRole = (min) => me && ROLE_RANK[me.role] >= ROLE_RANK[min];
+  const sessionToken = () => localStorage.getItem('korvix.session');
+
+  // ---- API helper (session bearer) -------------------------------------------
 
   async function api(method, path, body) {
     const headers = {};
-    const token = localStorage.getItem('korvix.token');
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (sessionToken()) headers.Authorization = `Bearer ${sessionToken()}`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const res = await fetch(path, {
       method,
@@ -25,19 +29,73 @@
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (res.status === 401) {
-      const entered = prompt('Admin token required:');
-      if (entered) {
-        localStorage.setItem('korvix.token', entered.trim());
-        return api(method, path, body);
-      }
+      showAuth('login');
       throw new Error('unauthorised');
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      alert(`${method} ${path} failed: ${data.error || res.status}`);
+      alert(`${method} ${path.split('?')[0]} failed: ${data.error || res.status}`);
       throw new Error(data.error || String(res.status));
     }
     return data;
+  }
+
+  // ---- login / first-run setup ---------------------------------------------------
+
+  function showAuth(mode) {
+    $('#auth-overlay').style.display = 'flex';
+    $('#auth-heading').textContent = mode === 'setup'
+      ? 'Welcome! Create the first admin account' : 'Sign in';
+    $('#auth-name').style.display = mode === 'setup' ? 'block' : 'none';
+    $('#auth-submit').textContent = mode === 'setup' ? 'Create account' : 'Sign in';
+    $('#auth-submit').dataset.mode = mode;
+    $('#auth-error').textContent = '';
+  }
+
+  async function submitAuth() {
+    const mode = $('#auth-submit').dataset.mode || 'login';
+    const email = $('#auth-email').value.trim();
+    const password = $('#auth-password').value;
+    if (!email || !password) return;
+    const res = await fetch(mode === 'setup' ? '/api/auth/setup' : '/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, name: $('#auth-name').value.trim() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('#auth-error').textContent = data.error || `error ${res.status}`;
+      return;
+    }
+    localStorage.setItem('korvix.session', data.token);
+    me = data.user;
+    $('#auth-overlay').style.display = 'none';
+    $('#auth-password').value = '';
+    enterApp();
+  }
+
+  $('#auth-submit').addEventListener('click', submitAuth);
+  $('#auth-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
+
+  $('#logout-btn').addEventListener('click', async () => {
+    try { await api('POST', '/api/auth/logout'); } catch { /* session may be dead */ }
+    localStorage.removeItem('korvix.session');
+    location.reload();
+  });
+
+  function applyRoleUi() {
+    $('#user-chip').textContent = me ? `${me.name || me.email} · ${me.role}${me.org_name ? ' @ ' + me.org_name : ' @ Korvix'}` : '';
+    $('#logout-btn').style.display = me && me.id !== '_legacy' ? '' : 'none';
+    document.querySelectorAll('#nav button[data-minrole]').forEach((b) => {
+      b.style.display = hasRole(b.dataset.minrole) ? '' : 'none';
+    });
+    $('#add-venue-btn').style.display = hasRole('admin') ? '' : 'none';
+  }
+
+  async function enterApp() {
+    applyRoleUi();
+    await refresh();
+    startPolling();
   }
 
   const venue = () => venues.find((v) => v.id === venueId) || venues[0] || null;
@@ -48,9 +106,17 @@
     venues = (await api('GET', '/api/venues')).venues;
     if (!venue() && venues.length) venueId = venues[0].id;
     const sel = $('#venue-select');
-    sel.innerHTML = venues.map((v) =>
-      `<option value="${v.id}" ${v.id === venueId ? 'selected' : ''}>${esc(v.name)}</option>`).join('')
-      || '<option>No venues yet</option>';
+    const option = (v) => `<option value="${v.id}" ${v.id === venueId ? 'selected' : ''}>${esc(v.name)}</option>`;
+    if (me && me.role === 'superadmin') {
+      // Group venues by business for the Korvix view.
+      const byOrg = {};
+      for (const v of venues) (byOrg[v.org_name || '(unassigned)'] ||= []).push(v);
+      sel.innerHTML = Object.entries(byOrg).map(([org, vs]) =>
+        `<optgroup label="${esc(org)}">${vs.map(option).join('')}</optgroup>`).join('')
+        || '<option>No venues yet</option>';
+    } else {
+      sel.innerHTML = venues.map(option).join('') || '<option>No venues yet</option>';
+    }
   }
 
   $('#venue-select').addEventListener('change', (e) => {
@@ -63,7 +129,16 @@
     const name = prompt('Venue name:');
     if (!name) return;
     const timezone = prompt('Timezone:', 'Australia/Sydney') || 'Australia/Sydney';
-    const created = await api('POST', '/api/venues', { name, timezone });
+    const payload = { name, timezone };
+    if (me.role === 'superadmin') {
+      const { orgs } = await api('GET', '/api/orgs');
+      if (!orgs.length) return alert('Create a business first (Businesses tab).');
+      const orgName = prompt(`Which business?\n${orgs.map((o) => o.name).join('\n')}`, orgs[0].name);
+      const org = orgs.find((o) => o.name.toLowerCase() === (orgName || '').trim().toLowerCase());
+      if (!org) return alert('No business by that name.');
+      payload.org_id = org.id;
+    }
+    const created = await api('POST', '/api/venues', payload);
     venueId = created.id;
     localStorage.setItem('korvix.venue', venueId);
     await refresh();
@@ -86,15 +161,19 @@
 
   async function render() {
     const v = venue();
-    if (!v) {
-      $('#tab-overview').innerHTML = '<div class="card">No venues yet — click <b>+ Venue</b> to create one.</div>';
-      return;
+    if (activeTab !== 'users' && activeTab !== 'orgs') {
+      if (!v) {
+        $('#tab-overview').innerHTML = '<div class="card">No venues yet — '
+          + (hasRole('admin') ? 'click <b>+ Venue</b> to create one.' : 'ask your administrator to add one.') + '</div>';
+        return;
+      }
+      venueId = v.id;
     }
-    venueId = v.id;
     const renderers = {
       overview: renderOverview, screens: renderScreens, content: renderContent,
       playlists: renderPlaylists, schedules: renderSchedules, draws: renderDraws,
       emergency: renderEmergency, integrations: renderIntegrations, reports: renderReports,
+      users: renderUsers, orgs: renderOrgs,
     };
     await renderers[activeTab]();
     await renderBanner();
@@ -136,8 +215,8 @@
       <div class="row" style="margin-top:16px">
         <h2 style="margin:0">Recent activity</h2>
         <div class="spacer"></div>
-        <a class="btn small secondary" download style="text-decoration:none"
-           href="/api/backup${localStorage.getItem('korvix.token') ? `?token=${encodeURIComponent(localStorage.getItem('korvix.token'))}` : ''}">⬇ Download backup</a>
+        ${hasRole('superadmin') ? `<a class="btn small secondary" download style="text-decoration:none"
+           href="/api/backup?token=${encodeURIComponent(sessionToken() || '')}">⬇ Download backup</a>` : ''}
       </div>
       <table><tbody>
         ${events.slice(0, 12).map((e) => `
@@ -597,15 +676,13 @@
   // ---- raffle number draws ----------------------------------------------------------
 
   async function renderDraws() {
-    const [{ draws }, remote] = await Promise.all([
-      api('GET', `/api/venues/${venueId}/draws`),
-      api('GET', `/api/venues/${venueId}/remote-token`),
-    ]);
+    const { draws } = await api('GET', `/api/venues/${venueId}/draws`);
+    const remote = hasRole('admin') ? await api('GET', `/api/venues/${venueId}/remote-token`) : null;
     const zones = venue().zones || [];
-    const remoteUrl = remote.url ? location.origin + remote.url : null;
+    const remoteUrl = remote && remote.url ? location.origin + remote.url : null;
 
     $('#tab-draws').innerHTML = `
-      <h2>Staff remote app 📱</h2>
+      ${remote === null ? '' : `<h2>Staff remote app 📱</h2>
       <div class="card">
         <p class="muted" style="margin-top:0">Bar staff run draws from their phone — no dashboard login.
         Send them this link; opening it in Chrome on Android (or Safari on iPhone) offers
@@ -618,7 +695,7 @@
                <button class="btn small secondary" id="remote-rotate">Generate new link (revoke old)</button>`
             : '<button class="btn" id="remote-rotate">Generate staff app link</button>'}
         </div>
-      </div>
+      </div>`}
 
       <h2>Raffle number draws</h2>
       <p class="muted">Set up a ticket range, then hit <b>Draw number</b> — targeted screens take over with a spinning number and reveal the winner.
@@ -660,7 +737,8 @@
         </tbody>
       </table>`;
 
-    $('#remote-rotate').onclick = async () => {
+    const rotateBtn = $('#remote-rotate');
+    if (rotateBtn) rotateBtn.onclick = async () => {
       if (remoteUrl && !confirm('Generate a new link? Every phone using the current link loses access.')) return;
       await api('POST', `/api/venues/${venueId}/remote-token`);
       render();
@@ -715,7 +793,7 @@
         <div class="form-grid">
           <label>Scope<select id="em-scope">
             <option value="${venueId}">${esc(venue().name)} only</option>
-            <option value="">ALL venues</option>
+            ${hasRole('superadmin') ? '<option value="">ALL venues (every business)</option>' : ''}
           </select></label>
           <label>Headline<input id="em-title" placeholder="EVACUATE NOW" value="Emergency — please follow staff directions"></label>
           <label>Message<input id="em-message" placeholder="Move calmly to the nearest exit…"></label>
@@ -882,13 +960,159 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
     };
   }
 
+  // ---- users (per-business logins) --------------------------------------------------------
+
+  async function renderUsers() {
+    const { users } = await api('GET', '/api/users');
+    const isSuper = me.role === 'superadmin';
+    const orgs = isSuper ? (await api('GET', '/api/orgs')).orgs : [];
+
+    $('#tab-users').innerHTML = `
+      <h2>Users ${isSuper ? '' : `— ${esc(me.org_name || '')}`}</h2>
+      <p class="muted">Admins manage the business (users, venues, staff app links). Editors run screens and content.
+      Viewers get read-only access and reports.</p>
+      <table>
+        <thead><tr>${isSuper ? '<th>Business</th>' : ''}<th>Name</th><th>Email</th><th>Role</th><th>Last login</th><th></th></tr></thead>
+        <tbody>${users.map((u) => `
+          <tr>
+            ${isSuper ? `<td class="muted">${esc(u.org_name || 'Korvix')}</td>` : ''}
+            <td>${esc(u.name)}</td>
+            <td>${esc(u.email)}</td>
+            <td><select data-role="${u.id}" ${u.id === me.id ? 'disabled' : ''}>
+              ${(isSuper ? ['superadmin', 'admin', 'editor', 'viewer'] : ['admin', 'editor', 'viewer'])
+                .map((r) => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}
+            </select></td>
+            <td class="muted">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'never'}</td>
+            <td style="text-align:right;white-space:nowrap">
+              <button class="btn small secondary" data-pw="${u.id}">Reset password</button>
+              ${u.id === me.id ? '' : `<button class="btn small danger" data-deluser="${u.id}" data-email="${esc(u.email)}">✕</button>`}
+            </td>
+          </tr>`).join('') || '<tr><td class="muted" colspan="6">No users</td></tr>'}
+        </tbody>
+      </table>
+
+      <h2>Add user</h2>
+      <div class="form-grid card">
+        ${isSuper ? `<label>Business<select id="us-org">
+          ${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}
+          <option value="">— Korvix (superadmin) —</option>
+        </select></label>` : ''}
+        <label>Name<input id="us-name" placeholder="Sam the Manager"></label>
+        <label>Email<input id="us-email" type="email" placeholder="sam@venue.com.au"></label>
+        <label>Password<input id="us-pass" type="password" placeholder="min 8 characters"></label>
+        <label>Role<select id="us-role">
+          <option value="admin">admin — manage this business</option>
+          <option value="editor" selected>editor — run screens & content</option>
+          <option value="viewer">viewer — read-only + reports</option>
+        </select></label>
+        <button class="btn" id="us-add">Add user</button>
+      </div>`;
+
+    $('#us-add').onclick = async () => {
+      const orgSel = $('#us-org');
+      const body = {
+        name: $('#us-name').value.trim(),
+        email: $('#us-email').value.trim(),
+        password: $('#us-pass').value,
+        role: $('#us-role').value,
+      };
+      if (isSuper) {
+        body.org_id = orgSel.value || null;
+        if (!orgSel.value) body.role = 'superadmin';
+      }
+      if (!body.email || !body.password) return alert('Email and password required');
+      await api('POST', '/api/users', body);
+      render();
+    };
+    $('#tab-users').onchange = async (e) => {
+      const sel = e.target.closest('[data-role]');
+      if (!sel) return;
+      await api('PATCH', `/api/users/${sel.dataset.role}`, { role: sel.value });
+      render();
+    };
+    $('#tab-users').onclick = async (e) => {
+      const pw = e.target.closest('[data-pw]');
+      if (pw) {
+        const newPass = prompt('New password (min 8 characters) — this signs the user out everywhere:');
+        if (newPass) { await api('PATCH', `/api/users/${pw.dataset.pw}`, { password: newPass }); alert('Password updated.'); }
+        return;
+      }
+      const del = e.target.closest('[data-deluser]');
+      if (del && confirm(`Delete user ${del.dataset.email}?`)) {
+        await api('DELETE', `/api/users/${del.dataset.deluser}`);
+        render();
+      }
+    };
+  }
+
+  // ---- businesses (superadmin) ---------------------------------------------------------------
+
+  async function renderOrgs() {
+    const { orgs } = await api('GET', '/api/orgs');
+    $('#tab-orgs').innerHTML = `
+      <h2>Businesses</h2>
+      <p class="muted">Each business owns its venues, users and media library — tenants never see each other.
+      Create the business, then add their admin login in the Users tab.</p>
+      <div class="row" style="margin-bottom:14px">
+        <input id="org-name" placeholder="New business name — e.g. Harbourside Hotels Group" style="min-width:280px">
+        <button class="btn" id="org-add">Create business</button>
+      </div>
+      <table>
+        <thead><tr><th>Business</th><th>Venues</th><th>Users</th><th>Created</th><th></th></tr></thead>
+        <tbody>${orgs.map((o) => `
+          <tr>
+            <td>${esc(o.name)}</td>
+            <td>${o.venues}</td>
+            <td>${o.users}</td>
+            <td class="muted">${new Date(o.created_at).toLocaleDateString()}</td>
+            <td style="text-align:right;white-space:nowrap">
+              <button class="btn small secondary" data-rename="${o.id}" data-name="${esc(o.name)}">Rename</button>
+              <button class="btn small danger" data-delorg="${o.id}" ${o.venues ? 'disabled title="Business still has venues"' : ''}>✕</button>
+            </td>
+          </tr>`).join('') || '<tr><td class="muted" colspan="5">No businesses yet</td></tr>'}
+        </tbody>
+      </table>`;
+
+    $('#org-add').onclick = async () => {
+      const name = $('#org-name').value.trim();
+      if (!name) return;
+      await api('POST', '/api/orgs', { name });
+      render();
+    };
+    $('#tab-orgs').onclick = async (e) => {
+      const rename = e.target.closest('[data-rename]');
+      if (rename) {
+        const name = prompt('Business name:', rename.dataset.name);
+        if (name) { await api('PATCH', `/api/orgs/${rename.dataset.rename}`, { name }); await refresh(); }
+        return;
+      }
+      const del = e.target.closest('[data-delorg]');
+      if (del && confirm('Delete this business? Its users lose access.')) {
+        await api('DELETE', `/api/orgs/${del.dataset.delorg}`);
+        render();
+      }
+    };
+  }
+
   // ---- boot -------------------------------------------------------------------------------
 
-  (async () => {
-    await refresh();
-    setInterval(() => {
+  let pollTimer = null;
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => {
+      if (!me) return;
       if (activeTab === 'overview') render();
       else renderBanner();
     }, 15000);
+  }
+
+  (async () => {
+    const state = await (await fetch('/api/auth/state')).json();
+    if (state.needs_setup) return showAuth('setup');
+    if (!sessionToken()) return showAuth('login');
+    try {
+      me = (await api('GET', '/api/auth/me')).user;
+      enterApp();
+    } catch { /* api() already showed the login overlay */ }
   })();
 })();

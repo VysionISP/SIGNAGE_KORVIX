@@ -83,6 +83,20 @@
   h2 { margin: 24px 0 10px; font-size: 17px; }
   h2:first-child { margin-top: 0; }
   .spacer { flex: 1; }
+
+  #auth-overlay {
+    position: fixed; inset: 0; z-index: 100; display: none;
+    align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at top, #12233a 0%, #060b14 75%);
+  }
+  #auth-overlay .box { width: 340px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px; }
+  #auth-overlay .logo { text-align: center; font-weight: 800; letter-spacing: .14em; font-size: 18px; margin-bottom: 4px; }
+  #auth-overlay .logo span { color: var(--accent); }
+  #auth-overlay h3 { text-align: center; margin: 4px 0 18px; font-weight: 500; color: var(--muted); font-size: 14px; }
+  #auth-overlay input { width: 100%; margin-bottom: 10px; padding: 11px; }
+  #auth-overlay button { width: 100%; padding: 11px; }
+  #auth-error { color: #fca5a5; font-size: 13px; text-align: center; min-height: 18px; margin-bottom: 8px; }
+  .userchip { font-size: 13px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -93,6 +107,8 @@
     <button class="btn secondary" id="add-venue-btn">+ Venue</button>
     <div class="spacer"></div>
     <div class="muted" id="fleet-summary"></div>
+    <div class="userchip" id="user-chip"></div>
+    <button class="btn small secondary" id="logout-btn" style="display:none">Sign out</button>
   </header>
   <nav id="nav">
     <button data-tab="overview" class="active">Overview</button>
@@ -104,6 +120,8 @@
     <button data-tab="emergency">Emergency</button>
     <button data-tab="integrations">Integrations</button>
     <button data-tab="reports">Reports</button>
+    <button data-tab="users" data-minrole="admin">Users</button>
+    <button data-tab="orgs" data-minrole="superadmin">Businesses</button>
   </nav>
   <main>
     <section class="tab active" id="tab-overview"></section>
@@ -115,7 +133,21 @@
     <section class="tab" id="tab-emergency"></section>
     <section class="tab" id="tab-integrations"></section>
     <section class="tab" id="tab-reports"></section>
+    <section class="tab" id="tab-users"></section>
+    <section class="tab" id="tab-orgs"></section>
   </main>
+
+  <div id="auth-overlay">
+    <div class="box">
+      <div class="logo">KORVIX <span>SIGNAGE</span></div>
+      <h3 id="auth-heading">Sign in</h3>
+      <div id="auth-error"></div>
+      <input id="auth-name" placeholder="Your name" style="display:none" autocomplete="name">
+      <input id="auth-email" type="email" placeholder="Email" autocomplete="username">
+      <input id="auth-password" type="password" placeholder="Password" autocomplete="current-password">
+      <button class="btn" id="auth-submit">Sign in</button>
+    </div>
+  </div>
 <script src="admin.js"></script>
 </body>
 </html>

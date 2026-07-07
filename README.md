@@ -9,6 +9,29 @@ Built to sit alongside Korvix connectivity as a recurring managed service:
 one dashboard, many venues, players that keep running when the internet
 doesn't.
 
+## Multi-tenant model
+
+The platform is fully multi-tenant: **businesses** own venues, users and
+their media library, and tenants never see each other.
+
+| Role | Can do |
+|------|--------|
+| **superadmin** (Korvix NOC) | Everything across all businesses: create businesses, move venues between them, ALL-venues emergency broadcast, backups |
+| **admin** (per business) | Manage their business: users, venues, staff app links — plus everything editors can |
+| **editor** | Run the venues: screens, content/uploads, playlists, schedules, draws, emergencies, integrations |
+| **viewer** | Read-only + proof-of-play reports |
+
+First run shows a setup screen that creates the Korvix superadmin. From
+there: Businesses tab → create the customer's business, Users tab → add
+their admin login, and they take it from there. Sessions last 30 days;
+resetting a password signs that user out everywhere. The legacy
+`KORVIX_ADMIN_TOKEN` env var still works as a superadmin API key for
+scripted automation.
+
+Upgrading an existing single-tenant install is automatic: existing venues
+are gathered under a "Default Business" you can rename, and the dashboard
+prompts for the first admin account.
+
 ## Quick start
 
 Requires Node.js 22.5+ (uses the built-in SQLite driver). **No dependencies,
@@ -116,11 +139,19 @@ npm test           # end-to-end smoke tests (boots a real server)
 
 ## API sketch
 
-All endpoints are JSON. Player and integration endpoints are open (players
-authenticate by unguessable device key); set `KORVIX_ADMIN_TOKEN` to require
-`Authorization: Bearer <token>` on everything else.
+All endpoints are JSON. Player, staff-remote and integration endpoints carry
+their own credentials (device key / venue token); everything else requires a
+session: `POST /api/auth/login` → `{token}` → `Authorization: Bearer <token>`.
 
 ```
+# Auth & tenants
+GET  /api/auth/state                      { needs_setup } — first-run check
+POST /api/auth/setup                      create the first superadmin (locked after)
+POST /api/auth/login                      { email, password } -> { token, user }
+POST /api/auth/logout | GET /api/auth/me | POST /api/auth/password
+GET/POST /api/orgs, PATCH/DELETE /api/orgs/:id       businesses
+GET/POST /api/users, PATCH/DELETE /api/users/:id     logins & roles
+
 # Fleet
 GET  /api/venues                          venues + zones + screen status
 POST /api/venues                          { name, timezone, address }
@@ -176,7 +207,7 @@ GET  /api/integrations/:venueId           current feeds
 | `PORT`               | `4700`              | HTTP port                            |
 | `HOST`               | `0.0.0.0`           | Bind address                         |
 | `KORVIX_DATA_DIR`    | `./data`            | Database + uploaded media            |
-| `KORVIX_ADMIN_TOKEN` | *(unset = open)*    | Bearer token for the admin API       |
+| `KORVIX_ADMIN_TOKEN` | *(unset = off)*     | Optional legacy superadmin API key for automation |
 | `KORVIX_NO_DEMO`     | *(unset)*           | `1` skips demo venue seeding         |
 | `KORVIX_ALERT_WEBHOOK` | *(unset = off)*   | URL POSTed screen offline/recovery alerts (Slack/Teams/any JSON) |
 | `KORVIX_OFFLINE_MS`  | `90000`             | Silence before a screen counts as offline |
@@ -190,7 +221,6 @@ walls. Portrait screens are supported per-screen via the orientation setting.
 
 ## Roadmap
 
-- Multi-tenant auth (per-venue operator logins, Korvix NOC super-admin)
 - Native BEPOZ/SwiftPOS pollers (today they push to the generic webhooks)
 - Player packaging for Raspberry Pi / Android with watchdog + auto-update
 - Screen layout zones (split-screen: menu + ticker + promo)

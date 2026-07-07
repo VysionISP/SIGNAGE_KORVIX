@@ -121,7 +121,7 @@ async function refreshWeather() {
 
 function start() {
   // .unref() so timers never hold the process open (tests, shutdown).
-  setInterval(() => { checkOffline(); prunePlays(); }, 30 * 1000).unref();
+  setInterval(() => { checkOffline(); prunePlays(); require('./auth').cleanupSessions(); }, 30 * 1000).unref();
   setInterval(refreshWeather, 30 * 60 * 1000).unref();
   setTimeout(refreshWeather, 5000).unref(); // first pass shortly after boot
   if (!ALERT_WEBHOOK) {

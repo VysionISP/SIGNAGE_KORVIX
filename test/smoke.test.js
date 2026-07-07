@@ -15,17 +15,21 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'korvix-test-'));
 process.env.KORVIX_DATA_DIR = tmp;
 process.env.KORVIX_DB = path.join(tmp, 'test.db');
 process.env.KORVIX_NO_DEMO = '1';
-process.env.KORVIX_ADMIN_TOKEN = '';
+process.env.KORVIX_ADMIN_TOKEN = 'legacy-api-token-for-tests';
 process.env.KORVIX_OFFLINE_MS = '150'; // fast offline detection for the alert test
 
 const { start, server } = require('../src/server');
 
 let base;
+let adminToken = null; // superadmin session from first-run setup
 
-async function api(method, urlPath, body) {
+async function api(method, urlPath, body, token = adminToken) {
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(base + urlPath, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
@@ -35,6 +39,14 @@ async function api(method, urlPath, body) {
 test.before(async () => {
   await start(0, '127.0.0.1');
   base = `http://127.0.0.1:${server.address().port}`;
+  // First-run setup creates the Korvix superadmin.
+  const state = await api('GET', '/api/auth/state');
+  if (!state.data.needs_setup) throw new Error('expected fresh install');
+  const setup = await api('POST', '/api/auth/setup', {
+    email: 'noc@korvix.au', password: 'super-secret-1', name: 'Korvix NOC',
+  });
+  if (setup.status !== 201) throw new Error('setup failed: ' + JSON.stringify(setup.data));
+  adminToken = setup.data.token;
 });
 
 test.after(() => {
@@ -43,10 +55,18 @@ test.after(() => {
 });
 
 test('full venue lifecycle', async (t) => {
-  let venueId, zoneId, screenId, deviceKey, mediaId, playlistId;
+  let orgId, venueId, zoneId, screenId, deviceKey, mediaId, playlistId;
 
-  await t.test('create venue, zone, screen', async () => {
-    const venue = await api('POST', '/api/venues', { name: 'Test Tavern', timezone: 'Australia/Sydney' });
+  await t.test('create business, venue, zone, screen', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'Test Hospitality Group' });
+    assert.strictEqual(org.status, 201);
+    orgId = org.data.id;
+
+    // Superadmin must say which business the venue belongs to
+    const noOrg = await api('POST', '/api/venues', { name: 'Orphan' });
+    assert.strictEqual(noOrg.status, 400);
+
+    const venue = await api('POST', '/api/venues', { name: 'Test Tavern', timezone: 'Australia/Sydney', org_id: orgId });
     assert.strictEqual(venue.status, 201);
     venueId = venue.data.id;
 
@@ -328,7 +348,7 @@ test('full venue lifecycle', async (t) => {
   });
 
   await t.test('backup endpoint returns a valid SQLite snapshot', async () => {
-    const res = await fetch(base + '/api/backup');
+    const res = await fetch(base + `/api/backup?token=${adminToken}`); // query token, as browser downloads use
     assert.strictEqual(res.status, 200);
     assert.match(res.headers.get('content-disposition'), /korvix-backup-.*\.db/);
     const buf = Buffer.from(await res.arrayBuffer());
@@ -338,7 +358,9 @@ test('full venue lifecycle', async (t) => {
   await t.test('graphics upload lifecycle: upload, use, protect, delete', async () => {
     // 1x1 transparent PNG
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
-    const up = await fetch(base + '/api/upload?name=promo.png', { method: 'POST', body: png });
+    const up = await fetch(base + '/api/upload?name=promo.png', {
+      method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: png,
+    });
     const uploaded = await up.json();
     assert.strictEqual(up.status, 201);
     assert.match(uploaded.url, /^\/uploads\/.+promo\.png$/);
@@ -350,7 +372,9 @@ test('full venue lifecycle', async (t) => {
     assert.match(got.headers.get('cache-control'), /immutable/);
 
     // Unsupported extensions are rejected
-    const bad = await fetch(base + '/api/upload?name=hack.exe', { method: 'POST', body: png });
+    const bad = await fetch(base + '/api/upload?name=hack.exe', {
+      method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: png,
+    });
     assert.strictEqual(bad.status, 400);
 
     // Create media from the upload with contain fit -> reaches the manifest
@@ -386,6 +410,115 @@ test('full venue lifecycle', async (t) => {
     await api('POST', `/api/screens/${screenId}/unpair`);
     const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
     assert.strictEqual(manifest.status, 404);
+  });
+});
+
+test('multi-tenancy: businesses are isolated, roles enforced', async (t) => {
+  let orgA, orgB, venueA, adminBToken, editorBToken, viewerBToken, venueB;
+
+  await t.test('set up two businesses with users', async () => {
+    orgA = (await api('POST', '/api/orgs', { name: 'Business A' })).data.id;
+    orgB = (await api('POST', '/api/orgs', { name: 'Business B' })).data.id;
+    venueA = (await api('POST', '/api/venues', { name: 'A Tavern', org_id: orgA })).data.id;
+
+    const users = [
+      { email: 'admin@b.com', role: 'admin' },
+      { email: 'editor@b.com', role: 'editor' },
+      { email: 'viewer@b.com', role: 'viewer' },
+    ];
+    for (const u of users) {
+      const created = await api('POST', '/api/users', { ...u, password: 'password-1', org_id: orgB });
+      assert.strictEqual(created.status, 201, JSON.stringify(created.data));
+    }
+    const login = (email) => api('POST', '/api/auth/login', { email, password: 'password-1' }, null);
+    adminBToken = (await login('admin@b.com')).data.token;
+    editorBToken = (await login('editor@b.com')).data.token;
+    viewerBToken = (await login('viewer@b.com')).data.token;
+    assert.ok(adminBToken && editorBToken && viewerBToken);
+
+    const badLogin = await api('POST', '/api/auth/login', { email: 'admin@b.com', password: 'wrong' }, null);
+    assert.strictEqual(badLogin.status, 401);
+  });
+
+  await t.test('org admin creates venues in their own business only', async () => {
+    const venue = await api('POST', '/api/venues', { name: 'B Sports Bar' }, adminBToken);
+    assert.strictEqual(venue.status, 201);
+    assert.strictEqual(venue.data.org_id, orgB);
+    venueB = venue.data.id;
+  });
+
+  await t.test('tenants cannot see each other', async () => {
+    // B admin lists venues: only their own
+    const list = await api('GET', '/api/venues', undefined, adminBToken);
+    assert.ok(list.data.venues.every((v) => v.org_id === orgB));
+    // Accessing A's venue by id 404s (no existence leak)
+    for (const path of [`/api/venues/${venueA}/screens`, `/api/venues/${venueA}/media`, `/api/venues/${venueA}/reports/plays`]) {
+      const res = await api('GET', path, undefined, adminBToken);
+      assert.strictEqual(res.status, 404, path);
+    }
+    const write = await api('POST', `/api/venues/${venueA}/media`, { name: 'x', type: 'html' }, adminBToken);
+    assert.strictEqual(write.status, 404);
+    // Health overview scoped
+    const health = await api('GET', '/api/health/overview', undefined, adminBToken);
+    assert.ok(health.data.venues.every((v) => v.id !== venueA));
+  });
+
+  await t.test('roles: editor runs venues, cannot manage users; viewer read-only', async () => {
+    const media = await api('POST', `/api/venues/${venueB}/media`, { name: 'B slide', type: 'html', content: '<h1>B</h1>' }, editorBToken);
+    assert.strictEqual(media.status, 201);
+
+    const editorUsers = await api('GET', '/api/users', undefined, editorBToken);
+    assert.strictEqual(editorUsers.status, 403);
+    const editorAddUser = await api('POST', '/api/users', { email: 'x@b.com', password: 'password-1', role: 'editor' }, editorBToken);
+    assert.strictEqual(editorAddUser.status, 403);
+
+    const viewerRead = await api('GET', `/api/venues/${venueB}/media`, undefined, viewerBToken);
+    assert.strictEqual(viewerRead.status, 200);
+    const viewerWrite = await api('POST', `/api/venues/${venueB}/media`, { name: 'nope', type: 'html' }, viewerBToken);
+    assert.strictEqual(viewerWrite.status, 403);
+
+    // Venue-wide emergency OK for editor; ALL-venues is Korvix-only
+    const em = await api('POST', '/api/emergencies', { venue_id: venueB, title: 'Test', level: 'notice' }, editorBToken);
+    assert.strictEqual(em.status, 201);
+    await api('POST', `/api/emergencies/${em.data.id}/clear`, undefined, editorBToken);
+    const globalEm = await api('POST', '/api/emergencies', { title: 'ALL', level: 'notice' }, adminBToken);
+    assert.strictEqual(globalEm.status, 403);
+
+    // Backup is Korvix-only
+    const backup = await api('GET', '/api/backup', undefined, adminBToken);
+    assert.strictEqual(backup.status, 403);
+  });
+
+  await t.test('org admin manages users in own org; superadmin protections hold', async () => {
+    const users = await api('GET', '/api/users', undefined, adminBToken);
+    assert.strictEqual(users.status, 200);
+    assert.ok(users.data.users.every((u) => u.org_id === orgB));
+
+    // B admin can't touch the superadmin
+    const superUser = (await api('GET', '/api/users')).data.users.find((u) => u.role === 'superadmin');
+    const touch = await api('PATCH', `/api/users/${superUser.id}`, { role: 'viewer' }, adminBToken);
+    assert.strictEqual(touch.status, 404);
+    // Nobody deletes the last superadmin
+    const delSuper = await api('DELETE', `/api/users/${superUser.id}`);
+    assert.strictEqual(delSuper.status, 400); // own account
+  });
+
+  await t.test('legacy env token still acts as superadmin API key', async () => {
+    const res = await api('GET', '/api/venues', undefined, 'legacy-api-token-for-tests');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.data.venues.some((v) => v.id === venueA));
+  });
+
+  await t.test('logout kills the session', async () => {
+    const out = await api('POST', '/api/auth/logout', {}, viewerBToken);
+    assert.strictEqual(out.status, 200);
+    const after = await api('GET', '/api/auth/me', undefined, viewerBToken);
+    assert.strictEqual(after.status, 401);
+  });
+
+  await t.test('setup endpoint locked after first run', async () => {
+    const again = await api('POST', '/api/auth/setup', { email: 'evil@x.com', password: 'hacktheplanet' }, null);
+    assert.strictEqual(again.status, 409);
   });
 });
 

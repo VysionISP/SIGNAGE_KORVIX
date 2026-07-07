@@ -10,16 +10,18 @@ const { sendJson, readBody, HttpError } = require('./util');
 const seedDemo = require('./seed');
 const monitor = require('./monitor');
 
+const auth = require('./auth');
+
 const adminRoutes = require('./routes/admin').routes;
 const playerRoutes = require('./routes/player').routes;
 const integrationRoutes = require('./routes/integrations').routes;
 const remoteRoutes = require('./routes/remote').routes;
+const authRoutes = require('./routes/auth').routes;
 
 const PORT = parseInt(process.env.PORT, 10) || 4700;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const UPLOAD_DIR = path.join(db.DATA_DIR, 'uploads');
-const ADMIN_TOKEN = process.env.KORVIX_ADMIN_TOKEN || '';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -41,7 +43,7 @@ const MIME = {
 
 // ---- routing --------------------------------------------------------------
 
-const allRoutes = [...adminRoutes, ...playerRoutes, ...integrationRoutes, ...remoteRoutes];
+const allRoutes = [...adminRoutes, ...playerRoutes, ...integrationRoutes, ...remoteRoutes, ...authRoutes];
 
 function compile(pattern) {
   const names = [];
@@ -65,24 +67,16 @@ function matchRoute(method, pathname) {
   return null;
 }
 
-// Player + integration endpoints are open (players auth by unguessable device
-// key); everything else under /api requires the admin token when one is set.
-function requiresAdminAuth(pathname) {
-  if (!ADMIN_TOKEN) return false;
-  if (!pathname.startsWith('/api/')) return false;
-  if (pathname.startsWith('/api/player/')) return false;
-  if (pathname.startsWith('/api/integrations/')) return false;
-  if (pathname.startsWith('/api/remote/')) return false; // staff remote auths by venue token
-  return true;
-}
+// Endpoints with their own auth story: players use unguessable device keys,
+// the staff remote a per-venue token, integrations push by venue id, and the
+// auth bootstrap endpoints must be reachable before any session exists.
+// Everything else under /api requires a logged-in user (or the legacy env
+// token, which acts as a superadmin API key).
+const OPEN_PREFIXES = ['/api/player/', '/api/integrations/', '/api/remote/'];
+const OPEN_PATHS = new Set(['/api/auth/state', '/api/auth/login', '/api/auth/setup']);
 
-function isAuthorized(req, url) {
-  const header = req.headers.authorization || '';
-  let token = header.startsWith('Bearer ') ? header.slice(7) : header;
-  // Browser downloads (<a href>) can't set headers; allow ?token= for backup only.
-  if (!token && url.pathname === '/api/backup') token = url.searchParams.get('token') || '';
-  if (token.length !== ADMIN_TOKEN.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(token), Buffer.from(ADMIN_TOKEN));
+function isOpenApi(pathname) {
+  return OPEN_PATHS.has(pathname) || OPEN_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
 // ---- uploads ----------------------------------------------------------------
@@ -94,7 +88,9 @@ async function handleUpload(req, res, url) {
   const buf = await readBody(req, 200 * 1024 * 1024); // media files up to 200 MB
   if (!buf.length) throw new HttpError(400, 'empty upload');
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  const name = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}-${original}`;
+  // Files are namespaced by business so tenants only see their own library.
+  const orgPrefix = `${req.user.org_id || 'global'}__`;
+  const name = `${orgPrefix}${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}-${original}`;
   fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
   sendJson(res, 201, { url: `/uploads/${name}`, bytes: buf.length });
 }
@@ -130,10 +126,12 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (pathname.startsWith('/api/')) {
-      if (requiresAdminAuth(pathname) && !isAuthorized(req, url)) {
-        throw new HttpError(401, 'admin token required');
+      if (!isOpenApi(pathname)) {
+        req.user = auth.resolveUser(req, url);
+        if (!req.user) throw new HttpError(401, 'sign in required');
       }
       if (pathname === '/api/upload' && req.method === 'POST') {
+        auth.requireRole(req.user, 'editor');
         return await handleUpload(req, res, url);
       }
       const match = matchRoute(req.method, pathname);
@@ -176,7 +174,8 @@ function start(port = PORT, host = HOST) {
       console.log(`[korvix] signage CMS listening on http://${host}:${addr.port}`);
       console.log(`[korvix] dashboard: http://localhost:${addr.port}/admin/`);
       console.log(`[korvix] player:    http://localhost:${addr.port}/player/`);
-      if (!ADMIN_TOKEN) console.log('[korvix] WARNING: no KORVIX_ADMIN_TOKEN set — admin API is open (dev mode)');
+      const hasUsers = !!db.get('SELECT id FROM users LIMIT 1');
+      if (!hasUsers) console.log('[korvix] no users yet — open the dashboard to create the first admin account');
       resolve(server);
     });
   });

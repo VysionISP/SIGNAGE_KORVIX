@@ -9,6 +9,11 @@ const db = require('../db');
 const sse = require('../sse');
 const { sendJson, readJson, HttpError, required } = require('../util');
 const { OFFLINE_AFTER_MS } = require('../monitor');
+const auth = require('../auth');
+
+// Tenant scoping: assertVenue() 404s on venues outside the caller's business
+// and enforces the minimum role. Sub-resources (screens, media, playlists,
+// schedules, draws, emergencies) resolve to their venue first, then assert.
 
 function nudgeVenue(venueId) {
   const keys = db.all(
@@ -44,7 +49,10 @@ function route(method, pattern, handler) { routes.push({ method, pattern, handle
 // ---- Venues -----------------------------------------------------------
 
 route('GET', '/api/venues', (req, res) => {
-  const venues = db.all('SELECT * FROM venues ORDER BY name').map((v) => ({
+  const rows = req.user.role === 'superadmin'
+    ? db.all('SELECT v.*, o.name AS org_name FROM venues v LEFT JOIN orgs o ON o.id = v.org_id ORDER BY o.name, v.name')
+    : db.all('SELECT v.*, o.name AS org_name FROM venues v LEFT JOIN orgs o ON o.id = v.org_id WHERE v.org_id = ? ORDER BY v.name', req.user.org_id ?? '');
+  const venues = rows.map((v) => ({
     ...v,
     screens: db.all('SELECT * FROM screens WHERE venue_id = ?', v.id).map(withStatus),
     zones: db.all('SELECT * FROM zones WHERE venue_id = ? ORDER BY name', v.id),
@@ -58,22 +66,37 @@ function numOrNull(value) {
 }
 
 route('POST', '/api/venues', async (req, res) => {
+  auth.requireRole(req.user, 'admin');
   const body = await readJson(req);
   required(body, 'name');
+  let orgId = req.user.org_id;
+  if (req.user.role === 'superadmin') {
+    orgId = body.org_id;
+    if (!orgId || !db.get('SELECT id FROM orgs WHERE id = ?', orgId)) {
+      throw new HttpError(400, 'org_id (business) required when creating a venue as superadmin');
+    }
+  }
   const venueId = db.id();
-  db.run('INSERT INTO venues (id, name, timezone, address, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    venueId, body.name, body.timezone || 'Australia/Sydney', body.address || '',
+  db.run('INSERT INTO venues (id, org_id, name, timezone, address, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    venueId, orgId, body.name, body.timezone || 'Australia/Sydney', body.address || '',
     numOrNull(body.latitude), numOrNull(body.longitude), db.now());
   sendJson(res, 201, db.get('SELECT * FROM venues WHERE id = ?', venueId));
 });
 
 route('PATCH', '/api/venues/:id', async (req, res, params) => {
-  const venue = mustFind(db.get('SELECT * FROM venues WHERE id = ?', params.id), 'venue');
+  const venue = auth.assertVenue(req.user, params.id, 'editor'); // editors may set location etc.
   const body = await readJson(req);
-  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, latitude = ?, longitude = ? WHERE id = ?',
+  let orgId = venue.org_id;
+  if (body.org_id !== undefined && body.org_id !== venue.org_id) {
+    auth.requireRole(req.user, 'superadmin'); // only Korvix moves venues between businesses
+    if (!db.get('SELECT id FROM orgs WHERE id = ?', body.org_id ?? '')) throw new HttpError(400, 'unknown business');
+    orgId = body.org_id;
+  }
+  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, latitude = ?, longitude = ?, org_id = ? WHERE id = ?',
     body.name ?? venue.name, body.timezone ?? venue.timezone, body.address ?? venue.address,
     body.latitude !== undefined ? numOrNull(body.latitude) : venue.latitude,
     body.longitude !== undefined ? numOrNull(body.longitude) : venue.longitude,
+    orgId,
     venue.id);
   if (body.latitude !== undefined || body.longitude !== undefined) {
     require('../monitor').refreshWeather(); // async, fire-and-forget
@@ -82,6 +105,7 @@ route('PATCH', '/api/venues/:id', async (req, res, params) => {
 });
 
 route('DELETE', '/api/venues/:id', (req, res, params) => {
+  auth.assertVenue(req.user, params.id, 'admin');
   db.run('DELETE FROM venues WHERE id = ?', params.id);
   sendJson(res, 200, { ok: true });
 });
@@ -89,7 +113,7 @@ route('DELETE', '/api/venues/:id', (req, res, params) => {
 // ---- Zones ------------------------------------------------------------
 
 route('POST', '/api/venues/:venueId/zones', async (req, res, params) => {
-  mustFind(db.get('SELECT id FROM venues WHERE id = ?', params.venueId), 'venue');
+  auth.assertVenue(req.user, params.venueId, 'editor');
   const body = await readJson(req);
   required(body, 'name');
   const zoneId = db.id();
@@ -99,6 +123,8 @@ route('POST', '/api/venues/:venueId/zones', async (req, res, params) => {
 });
 
 route('DELETE', '/api/zones/:id', (req, res, params) => {
+  const zone = mustFind(db.get('SELECT * FROM zones WHERE id = ?', params.id), 'zone');
+  auth.assertVenue(req.user, zone.venue_id, 'editor');
   db.run('DELETE FROM zones WHERE id = ?', params.id);
   sendJson(res, 200, { ok: true });
 });
@@ -106,12 +132,13 @@ route('DELETE', '/api/zones/:id', (req, res, params) => {
 // ---- Screens & pairing -------------------------------------------------
 
 route('GET', '/api/venues/:venueId/screens', (req, res, params) => {
+  auth.assertVenue(req.user, params.venueId, 'viewer');
   const screens = db.all('SELECT * FROM screens WHERE venue_id = ? ORDER BY name', params.venueId);
   sendJson(res, 200, { screens: screens.map(withStatus) });
 });
 
 route('POST', '/api/venues/:venueId/screens', async (req, res, params) => {
-  mustFind(db.get('SELECT id FROM venues WHERE id = ?', params.venueId), 'venue');
+  auth.assertVenue(req.user, params.venueId, 'editor');
   const body = await readJson(req);
   required(body, 'name');
   const screenId = db.id();
@@ -126,6 +153,7 @@ const ROTATIONS = new Set([0, 90, 180, 270]);
 
 route('PATCH', '/api/screens/:id', async (req, res, params) => {
   const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
+  auth.assertVenue(req.user, screen.venue_id, 'editor');
   const body = await readJson(req);
   let rotation = screen.rotation;
   if (body.rotation !== undefined) {
@@ -143,7 +171,8 @@ route('PATCH', '/api/screens/:id', async (req, res, params) => {
 });
 
 route('DELETE', '/api/screens/:id', (req, res, params) => {
-  const screen = db.get('SELECT * FROM screens WHERE id = ?', params.id);
+  const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
+  auth.assertVenue(req.user, screen.venue_id, 'editor');
   db.run('DELETE FROM screens WHERE id = ?', params.id);
   if (screen?.device_key) sse.send(screen.device_key, 'unpaired', {});
   sendJson(res, 200, { ok: true });
@@ -157,6 +186,7 @@ route('GET', '/api/pairings', (req, res) => {
 // Claim a device (by the 6-char code it shows on screen) for an existing screen.
 route('POST', '/api/screens/:id/pair', async (req, res, params) => {
   const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
+  auth.assertVenue(req.user, screen.venue_id, 'editor');
   const body = await readJson(req);
   required(body, 'pairing_code');
   const code = String(body.pairing_code).trim().toUpperCase();
@@ -172,6 +202,7 @@ route('POST', '/api/screens/:id/pair', async (req, res, params) => {
 
 route('POST', '/api/screens/:id/unpair', (req, res, params) => {
   const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
+  auth.assertVenue(req.user, screen.venue_id, 'editor');
   if (screen.device_key) sse.send(screen.device_key, 'unpaired', {});
   db.run('UPDATE screens SET device_key = NULL, last_seen_at = NULL WHERE id = ?', screen.id);
   sendJson(res, 200, { ok: true });
@@ -190,12 +221,15 @@ function usedBy(fileName) {
      JOIN venues v ON v.id = m.venue_id WHERE m.src = ?`, `/uploads/${fileName}`);
 }
 
-// List everything venues have uploaded, with usage + disk footprint.
+// List everything this business has uploaded, with usage + disk footprint.
+// Files are namespaced <orgId>__name; superadmins see every tenant's files.
 route('GET', '/api/uploads', (req, res) => {
+  const prefix = req.user.role === 'superadmin' ? null : `${req.user.org_id || 'global'}__`;
   let files = [];
   try {
     files = fs.readdirSync(UPLOAD_DIR)
       .filter((f) => !f.startsWith('.'))
+      .filter((f) => !prefix || f.startsWith(prefix))
       .map((f) => {
         const stat = fs.statSync(path.join(UPLOAD_DIR, f));
         return {
@@ -212,7 +246,11 @@ route('GET', '/api/uploads', (req, res) => {
 });
 
 route('DELETE', '/api/uploads/:name', (req, res, params, url) => {
+  auth.requireRole(req.user, 'editor');
   const name = path.basename(params.name); // no traversal
+  if (req.user.role !== 'superadmin' && !name.startsWith(`${req.user.org_id || 'global'}__`)) {
+    throw new HttpError(404, 'file not found');
+  }
   const file = path.join(UPLOAD_DIR, name);
   if (!fs.existsSync(file)) throw new HttpError(404, 'file not found');
   const refs = usedBy(name);
@@ -224,11 +262,12 @@ route('DELETE', '/api/uploads/:name', (req, res, params, url) => {
 });
 
 route('GET', '/api/venues/:venueId/media', (req, res, params) => {
+  auth.assertVenue(req.user, params.venueId, 'viewer');
   sendJson(res, 200, { media: db.all('SELECT * FROM media WHERE venue_id = ? ORDER BY created_at DESC', params.venueId) });
 });
 
 route('POST', '/api/venues/:venueId/media', async (req, res, params) => {
-  mustFind(db.get('SELECT id FROM venues WHERE id = ?', params.venueId), 'venue');
+  auth.assertVenue(req.user, params.venueId, 'editor');
   const body = await readJson(req);
   required(body, 'name', 'type');
   if (!MEDIA_TYPES.has(body.type)) throw new HttpError(400, `type must be one of: ${[...MEDIA_TYPES].join(', ')}`);
@@ -243,6 +282,7 @@ route('POST', '/api/venues/:venueId/media', async (req, res, params) => {
 
 route('PATCH', '/api/media/:id', async (req, res, params) => {
   const media = mustFind(db.get('SELECT * FROM media WHERE id = ?', params.id), 'media');
+  auth.assertVenue(req.user, media.venue_id, 'editor');
   const body = await readJson(req);
   if (body.type && !MEDIA_TYPES.has(body.type)) throw new HttpError(400, 'invalid media type');
   if (body.fit && !FITS.has(body.fit)) throw new HttpError(400, 'fit must be cover or contain');
@@ -257,7 +297,8 @@ route('PATCH', '/api/media/:id', async (req, res, params) => {
 });
 
 route('DELETE', '/api/media/:id', (req, res, params) => {
-  const media = db.get('SELECT * FROM media WHERE id = ?', params.id);
+  const media = mustFind(db.get('SELECT * FROM media WHERE id = ?', params.id), 'media');
+  auth.assertVenue(req.user, media.venue_id, 'editor');
   db.run('DELETE FROM media WHERE id = ?', params.id);
   if (media) nudgeVenue(media.venue_id);
   sendJson(res, 200, { ok: true });
@@ -266,6 +307,7 @@ route('DELETE', '/api/media/:id', (req, res, params) => {
 // ---- Playlists -----------------------------------------------------------
 
 route('GET', '/api/venues/:venueId/playlists', (req, res, params) => {
+  auth.assertVenue(req.user, params.venueId, 'viewer');
   const playlists = db.all('SELECT * FROM playlists WHERE venue_id = ? ORDER BY name', params.venueId)
     .map((p) => ({
       ...p,
@@ -278,7 +320,7 @@ route('GET', '/api/venues/:venueId/playlists', (req, res, params) => {
 });
 
 route('POST', '/api/venues/:venueId/playlists', async (req, res, params) => {
-  mustFind(db.get('SELECT id FROM venues WHERE id = ?', params.venueId), 'venue');
+  auth.assertVenue(req.user, params.venueId, 'editor');
   const body = await readJson(req);
   required(body, 'name');
   const playlistId = db.id();
@@ -289,6 +331,7 @@ route('POST', '/api/venues/:venueId/playlists', async (req, res, params) => {
 
 route('POST', '/api/playlists/:id/items', async (req, res, params) => {
   const playlist = mustFind(db.get('SELECT * FROM playlists WHERE id = ?', params.id), 'playlist');
+  auth.assertVenue(req.user, playlist.venue_id, 'editor');
   const body = await readJson(req);
   required(body, 'media_id');
   mustFind(db.get('SELECT id FROM media WHERE id = ?', body.media_id), 'media');
@@ -303,6 +346,7 @@ route('POST', '/api/playlists/:id/items', async (req, res, params) => {
 // Replace item order: body { item_ids: [...] } in the desired sequence.
 route('POST', '/api/playlists/:id/reorder', async (req, res, params) => {
   const playlist = mustFind(db.get('SELECT * FROM playlists WHERE id = ?', params.id), 'playlist');
+  auth.assertVenue(req.user, playlist.venue_id, 'editor');
   const body = await readJson(req);
   if (!Array.isArray(body.item_ids)) throw new HttpError(400, 'item_ids array required');
   body.item_ids.forEach((itemId, index) => {
@@ -313,14 +357,16 @@ route('POST', '/api/playlists/:id/reorder', async (req, res, params) => {
 });
 
 route('DELETE', '/api/playlist-items/:id', (req, res, params) => {
-  const item = db.get('SELECT pi.*, p.venue_id FROM playlist_items pi JOIN playlists p ON p.id = pi.playlist_id WHERE pi.id = ?', params.id);
+  const item = mustFind(db.get('SELECT pi.*, p.venue_id FROM playlist_items pi JOIN playlists p ON p.id = pi.playlist_id WHERE pi.id = ?', params.id), 'playlist item');
+  auth.assertVenue(req.user, item.venue_id, 'editor');
   db.run('DELETE FROM playlist_items WHERE id = ?', params.id);
   if (item) nudgeVenue(item.venue_id);
   sendJson(res, 200, { ok: true });
 });
 
 route('DELETE', '/api/playlists/:id', (req, res, params) => {
-  const playlist = db.get('SELECT * FROM playlists WHERE id = ?', params.id);
+  const playlist = mustFind(db.get('SELECT * FROM playlists WHERE id = ?', params.id), 'playlist');
+  auth.assertVenue(req.user, playlist.venue_id, 'editor');
   db.run('DELETE FROM playlists WHERE id = ?', params.id);
   if (playlist) nudgeVenue(playlist.venue_id);
   sendJson(res, 200, { ok: true });
@@ -329,6 +375,7 @@ route('DELETE', '/api/playlists/:id', (req, res, params) => {
 // ---- Schedules (dayparting) ----------------------------------------------
 
 route('GET', '/api/venues/:venueId/schedules', (req, res, params) => {
+  auth.assertVenue(req.user, params.venueId, 'viewer');
   sendJson(res, 200, {
     schedules: db.all(
       `SELECT s.*, p.name AS playlist_name, z.name AS zone_name, sc.name AS screen_name
@@ -342,7 +389,7 @@ route('GET', '/api/venues/:venueId/schedules', (req, res, params) => {
 });
 
 route('POST', '/api/venues/:venueId/schedules', async (req, res, params) => {
-  mustFind(db.get('SELECT id FROM venues WHERE id = ?', params.venueId), 'venue');
+  auth.assertVenue(req.user, params.venueId, 'editor');
   const body = await readJson(req);
   required(body, 'playlist_id');
   mustFind(db.get('SELECT id FROM playlists WHERE id = ?', body.playlist_id), 'playlist');
@@ -361,6 +408,7 @@ route('POST', '/api/venues/:venueId/schedules', async (req, res, params) => {
 
 route('PATCH', '/api/schedules/:id', async (req, res, params) => {
   const schedule = mustFind(db.get('SELECT * FROM schedules WHERE id = ?', params.id), 'schedule');
+  auth.assertVenue(req.user, schedule.venue_id, 'editor');
   const body = await readJson(req);
   db.run(
     `UPDATE schedules SET name = ?, zone_id = ?, screen_id = ?, playlist_id = ?, days_of_week = ?,
@@ -380,7 +428,8 @@ route('PATCH', '/api/schedules/:id', async (req, res, params) => {
 });
 
 route('DELETE', '/api/schedules/:id', (req, res, params) => {
-  const schedule = db.get('SELECT * FROM schedules WHERE id = ?', params.id);
+  const schedule = mustFind(db.get('SELECT * FROM schedules WHERE id = ?', params.id), 'schedule');
+  auth.assertVenue(req.user, schedule.venue_id, 'editor');
   db.run('DELETE FROM schedules WHERE id = ?', params.id);
   if (schedule) nudgeVenue(schedule.venue_id);
   sendJson(res, 200, { ok: true });
@@ -391,12 +440,20 @@ route('DELETE', '/api/schedules/:id', (req, res, params) => {
 const EMERGENCY_LEVELS = new Set(['evacuation', 'lockdown', 'alert', 'notice']);
 
 route('GET', '/api/emergencies', (req, res) => {
-  sendJson(res, 200, { emergencies: db.all('SELECT * FROM emergencies ORDER BY created_at DESC LIMIT 50') });
+  const emergencies = req.user.role === 'superadmin'
+    ? db.all('SELECT * FROM emergencies ORDER BY created_at DESC LIMIT 50')
+    : db.all(
+      `SELECT e.* FROM emergencies e
+       WHERE e.venue_id IS NULL OR e.venue_id IN (SELECT id FROM venues WHERE org_id = ?)
+       ORDER BY e.created_at DESC LIMIT 50`, req.user.org_id ?? '');
+  sendJson(res, 200, { emergencies });
 });
 
 route('POST', '/api/emergencies', async (req, res) => {
   const body = await readJson(req);
   required(body, 'title');
+  if (body.venue_id) auth.assertVenue(req.user, body.venue_id, 'editor');
+  else auth.requireRole(req.user, 'superadmin'); // ALL venues = every tenant: Korvix only
   const level = EMERGENCY_LEVELS.has(body.level) ? body.level : 'alert';
   const emergencyId = db.id();
   db.run('INSERT INTO emergencies (id, venue_id, level, title, message, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
@@ -408,6 +465,8 @@ route('POST', '/api/emergencies', async (req, res) => {
 
 route('POST', '/api/emergencies/:id/clear', (req, res, params) => {
   const emergency = mustFind(db.get('SELECT * FROM emergencies WHERE id = ?', params.id), 'emergency');
+  if (emergency.venue_id) auth.assertVenue(req.user, emergency.venue_id, 'editor');
+  else auth.requireRole(req.user, 'superadmin');
   db.run('UPDATE emergencies SET active = 0, cleared_at = ? WHERE id = ?', db.now(), emergency.id);
   db.logEvent('emergency.cleared', { venueId: emergency.venue_id, detail: emergency.title });
   if (emergency.venue_id) nudgeVenue(emergency.venue_id); else nudgeAll();
@@ -421,7 +480,7 @@ const crypto = require('node:crypto');
 // Generate (or rotate) the venue's staff-remote token. Rotating instantly
 // revokes every phone holding the old link.
 route('POST', '/api/venues/:id/remote-token', (req, res, params) => {
-  const venue = mustFind(db.get('SELECT * FROM venues WHERE id = ?', params.id), 'venue');
+  const venue = auth.assertVenue(req.user, params.id, 'admin');
   const token = crypto.randomBytes(16).toString('hex');
   db.run('UPDATE venues SET remote_token = ? WHERE id = ?', token, venue.id);
   db.logEvent('remote.token_rotated', { venueId: venue.id, detail: venue.name });
@@ -429,7 +488,7 @@ route('POST', '/api/venues/:id/remote-token', (req, res, params) => {
 });
 
 route('GET', '/api/venues/:id/remote-token', (req, res, params) => {
-  const venue = mustFind(db.get('SELECT * FROM venues WHERE id = ?', params.id), 'venue');
+  const venue = auth.assertVenue(req.user, params.id, 'admin');
   sendJson(res, 200, venue.remote_token
     ? { token: venue.remote_token, url: `/remote/?t=${venue.remote_token}` }
     : { token: null, url: null });
@@ -445,6 +504,7 @@ route('GET', '/api/venues/:id/remote-token', (req, res, params) => {
 const { spinDraw, drawView } = require('../draws');
 
 route('GET', '/api/venues/:venueId/draws', (req, res, params) => {
+  auth.assertVenue(req.user, params.venueId, 'viewer');
   const draws = db.all(
     `SELECT d.*, z.name AS zone_name FROM draws d
      LEFT JOIN zones z ON z.id = d.zone_id
@@ -453,7 +513,7 @@ route('GET', '/api/venues/:venueId/draws', (req, res, params) => {
 });
 
 route('POST', '/api/venues/:venueId/draws', async (req, res, params) => {
-  mustFind(db.get('SELECT id FROM venues WHERE id = ?', params.venueId), 'venue');
+  auth.assertVenue(req.user, params.venueId, 'editor');
   const body = await readJson(req);
   required(body, 'name');
   const start = parseInt(body.range_start, 10);
@@ -473,6 +533,7 @@ route('POST', '/api/venues/:venueId/draws', async (req, res, params) => {
 
 route('POST', '/api/draws/:id/draw', (req, res, params) => {
   const draw = mustFind(db.get('SELECT * FROM draws WHERE id = ?', params.id), 'draw');
+  auth.assertVenue(req.user, draw.venue_id, 'editor');
   const updated = spinDraw(draw);
   db.logEvent('draw.number', { venueId: draw.venue_id, detail: `${draw.name}: #${drawView(updated).latest_number}` });
   nudgeVenue(draw.venue_id);
@@ -481,6 +542,7 @@ route('POST', '/api/draws/:id/draw', (req, res, params) => {
 
 route('POST', '/api/draws/:id/clear', (req, res, params) => {
   const draw = mustFind(db.get('SELECT * FROM draws WHERE id = ?', params.id), 'draw');
+  auth.assertVenue(req.user, draw.venue_id, 'editor');
   db.run("UPDATE draws SET status = 'cleared' WHERE id = ?", draw.id);
   db.logEvent('draw.cleared', { venueId: draw.venue_id, detail: draw.name });
   nudgeVenue(draw.venue_id);
@@ -488,7 +550,8 @@ route('POST', '/api/draws/:id/clear', (req, res, params) => {
 });
 
 route('DELETE', '/api/draws/:id', (req, res, params) => {
-  const draw = db.get('SELECT * FROM draws WHERE id = ?', params.id);
+  const draw = mustFind(db.get('SELECT * FROM draws WHERE id = ?', params.id), 'draw');
+  auth.assertVenue(req.user, draw.venue_id, 'editor');
   db.run('DELETE FROM draws WHERE id = ?', params.id);
   if (draw && draw.status === 'live') nudgeVenue(draw.venue_id);
   sendJson(res, 200, { ok: true });
@@ -497,7 +560,10 @@ route('DELETE', '/api/draws/:id', (req, res, params) => {
 // ---- Fleet health & events ---------------------------------------------------
 
 route('GET', '/api/health/overview', (req, res) => {
-  const venues = db.all('SELECT * FROM venues ORDER BY name').map((v) => {
+  const rows = req.user.role === 'superadmin'
+    ? db.all('SELECT * FROM venues ORDER BY name')
+    : db.all('SELECT * FROM venues WHERE org_id = ? ORDER BY name', req.user.org_id ?? '');
+  const venues = rows.map((v) => {
     const screens = db.all('SELECT * FROM screens WHERE venue_id = ?', v.id).map(withStatus);
     return {
       id: v.id,
@@ -514,7 +580,13 @@ route('GET', '/api/health/overview', (req, res) => {
 });
 
 route('GET', '/api/events', (req, res) => {
-  sendJson(res, 200, { events: db.all('SELECT * FROM events ORDER BY id DESC LIMIT 100') });
+  const events = req.user.role === 'superadmin'
+    ? db.all('SELECT * FROM events ORDER BY id DESC LIMIT 100')
+    : db.all(
+      `SELECT * FROM events
+       WHERE venue_id IN (SELECT id FROM venues WHERE org_id = ?)
+       ORDER BY id DESC LIMIT 100`, req.user.org_id ?? '');
+  sendJson(res, 200, { events });
 });
 
 // ---- Proof-of-play reporting ---------------------------------------------------
@@ -524,6 +596,7 @@ route('GET', '/api/events', (req, res) => {
 // cross-venue advertising network: "your promo ran N times for M minutes".
 
 route('GET', '/api/venues/:venueId/reports/plays', (req, res, params, url) => {
+  auth.assertVenue(req.user, params.venueId, 'viewer');
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 6 * 86400 * 1000).toISOString().slice(0, 10);
   const from = (url.searchParams.get('from') || weekAgo).slice(0, 10);
@@ -556,8 +629,9 @@ route('GET', '/api/venues/:venueId/reports/plays', (req, res, params, url) => {
 
 // ---- Backup ----------------------------------------------------------------------
 
-// Downloads a consistent snapshot of the whole CMS database.
+// Downloads a consistent snapshot of the whole CMS database (all tenants).
 route('GET', '/api/backup', (req, res) => {
+  auth.requireRole(req.user, 'superadmin');
   const stamp = new Date().toISOString().slice(0, 10);
   const tmp = path.join(db.DATA_DIR, `.backup-${process.pid}-${Date.now()}.db`);
   db.open().exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
