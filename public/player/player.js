@@ -10,8 +10,13 @@
   const STORE_KEY = 'korvix.device_key';
   const MANIFEST_KEY = 'korvix.last_manifest';
 
-  let deviceKey = localStorage.getItem(STORE_KEY) || null;
+  // Dashboard live-preview: /player/?preview=<deviceKey> renders exactly what
+  // that screen shows, without heartbeating or affecting its online status.
+  const previewKey = new URLSearchParams(location.search).get('preview');
+
+  let deviceKey = previewKey || localStorage.getItem(STORE_KEY) || null;
   let manifest = null;
+  const playQueue = []; // proof-of-play events, flushed with each heartbeat
   let eventSource = null;
   let itemIndex = -1;
   let advanceTimer = null;
@@ -44,6 +49,12 @@
   const bootTime = new Date().toISOString();
 
   async function boot() {
+    if (previewKey) {
+      show('stage');
+      connectEvents();
+      await refreshManifest();
+      return;
+    }
     try {
       const state = await hello();
       deviceKey = state.device_key;
@@ -107,15 +118,17 @@
 
   function renderStatus() {
     const name = manifest ? `${manifest.venue.name} · ${manifest.screen.name}` : 'not paired';
-    $('status-text').textContent = `${name}${connected ? '' : ' · reconnecting'}`;
+    $('status-text').textContent = `${previewKey ? 'PREVIEW · ' : ''}${name}${connected ? '' : ' · reconnecting'}`;
+    if (previewKey) $('status').style.opacity = '.9';
   }
 
   // ---- manifest & playback ----------------------------------------------------
 
   async function refreshManifest() {
     try {
-      const res = await fetch(`/api/player/${deviceKey}/manifest`, { cache: 'no-store' });
+      const res = await fetch(`/api/player/${deviceKey}/manifest${previewKey ? '?preview=1' : ''}`, { cache: 'no-store' });
       if (res.status === 404) { // unpaired server-side
+        if (previewKey) return;
         localStorage.removeItem(STORE_KEY);
         deviceKey = null;
         location.reload();
@@ -166,6 +179,7 @@
   }
 
   function stopPlayback() {
+    finishCurrentPlay();
     clearTimeout(advanceTimer);
     advanceTimer = null;
     itemIndex = -1;
@@ -173,12 +187,25 @@
     currentLayer = null;
   }
 
+  // Proof-of-play: close out the item that was showing and queue it.
+  let currentPlay = null;
+  function finishCurrentPlay() {
+    if (!currentPlay || previewKey) { currentPlay = null; return; }
+    currentPlay.duration = Math.round((Date.now() - currentPlay._t0) / 100) / 10;
+    delete currentPlay._t0;
+    playQueue.push(currentPlay);
+    if (playQueue.length > 500) playQueue.splice(0, playQueue.length - 500);
+    currentPlay = null;
+  }
+
   function nextItem() {
     clearTimeout(advanceTimer);
     const items = playableItems();
     if (!items.length) return;
+    finishCurrentPlay();
     itemIndex = (itemIndex + 1) % items.length;
     const item = items[itemIndex];
+    currentPlay = { media_id: item.media_id, name: item.name, started_at: new Date().toISOString(), _t0: Date.now() };
     const layer = buildLayer(item);
 
     const old = currentLayer;
@@ -287,6 +314,41 @@
           `<h1>On The Big Screens</h1><table>${rows || '<tr><td style="opacity:.7">Awaiting sports feed…</td></tr>'}</table>`,
           '#101827,#1e3a5f');
       }
+      case 'birthdays': {
+        const members = (feeds.membership && feeds.membership.birthdays) || [];
+        if (!members.length) {
+          return widgetShell('MEMBERS', '<h1>🎂 Birthdays</h1><div style="opacity:.7;font-size:2.5vw">Awaiting membership feed…</div>', '#3f1d38,#831843');
+        }
+        const names = members.slice(0, 8).map((m) => esc(m.name || m)).join('<br>');
+        return widgetShell('HAPPY BIRTHDAY TO OUR MEMBERS',
+          `<div style="font-size:6vw">🎂</div><div style="font-size:3.4vw;line-height:1.7;font-weight:700">${names}</div>` +
+          '<div style="font-size:2vw;opacity:.8;margin-top:2vh">Show your card at the bar for a birthday drink</div>',
+          '#3f1d38,#831843');
+      }
+      case 'happyhour': {
+        const hh = (feeds.pos && feeds.pos.happy_hour) || {};
+        if (!hh.from || !hh.to) {
+          return widgetShell('HAPPY HOUR', '<h1>Happy Hour</h1><div style="opacity:.7;font-size:2.5vw">Ask at the bar for today&rsquo;s times</div>', '#7a3b00,#e8590c');
+        }
+        const parts = new Intl.DateTimeFormat('en-AU', {
+          timeZone: manifest.venue.timezone, hour: '2-digit', minute: '2-digit', hour12: false,
+        }).format(new Date()).split(':');
+        const nowMin = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+        const toMin = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + (m || 0); };
+        const startMin = toMin(hh.from);
+        const endMin = toMin(hh.to);
+        const fmt = (mins) => mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+        let line;
+        if (nowMin >= startMin && nowMin < endMin) {
+          line = `<div class="big" style="font-size:7vw">ON NOW!</div><div style="font-size:3vw;margin-top:1vh">ends in ${fmt(endMin - nowMin)}</div>`;
+        } else {
+          const until = nowMin < startMin ? startMin - nowMin : (24 * 60 - nowMin) + startMin;
+          line = `<div style="font-size:2.6vw;opacity:.85">starts in</div><div class="big" style="font-size:9vw">${fmt(until)}</div>`;
+        }
+        return widgetShell('HAPPY HOUR',
+          line + `<div style="font-size:2.4vw;opacity:.85;margin-top:2vh">${esc(hh.from)} – ${esc(hh.to)} daily${hh.deal ? ' · ' + esc(hh.deal) : ''}</div>`,
+          '#7a3b00,#e8590c');
+      }
       case 'clock':
       case 'welcome':
       default: {
@@ -376,9 +438,10 @@
 
   let heartbeatTimer = null;
   function startHeartbeat() {
-    if (heartbeatTimer) return;
+    if (heartbeatTimer || previewKey) return;
     const beat = async () => {
       if (!deviceKey) return;
+      const batch = playQueue.splice(0, playQueue.length);
       try {
         await fetch(`/api/player/${deviceKey}/heartbeat`, {
           method: 'POST',
@@ -389,10 +452,12 @@
               current_item: itemIndex >= 0 && playableItems()[itemIndex] ? playableItems()[itemIndex].name : null,
               playlist: manifest && manifest.playlist ? manifest.playlist.name : null,
             },
+            plays: batch,
           }),
         });
         setConnected(true);
       } catch {
+        playQueue.unshift(...batch); // resend once we're back online
         setConnected(false);
       }
     };

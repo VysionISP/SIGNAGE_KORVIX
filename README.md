@@ -66,8 +66,24 @@ npm test           # end-to-end smoke tests (boots a real server)
   venue — most specific wins, then priority, then latest start time. Windows
   can wrap past midnight (`21:00–02:00`). Times are evaluated in each venue's
   own timezone, so one CMS runs venues in Sydney and Perth correctly.
-- **Health monitoring.** Players heartbeat every 30 s with what they're
-  playing; a screen with no heartbeat for 90 s shows offline on the dashboard.
+- **Health monitoring + offline alerts.** Players heartbeat every 30 s with
+  what they're playing; a screen with no heartbeat for 90 s shows offline on
+  the dashboard. Set `KORVIX_ALERT_WEBHOOK` and the CMS POSTs a JSON alert
+  (with a Slack/Teams-compatible `text` field) once per outage, and again on
+  recovery.
+- **Proof of play.** Players log every item actually displayed; the Reports
+  tab aggregates plays, minutes on screen and screens reached per content
+  item and per screen for any date range, with CSV export — the evidence
+  base for supplier campaigns and a cross-venue advertising network.
+  Retention 90 days (`KORVIX_PLAYS_RETENTION_DAYS`).
+- **Automatic weather.** Give a venue coordinates (Integrations tab) and the
+  CMS refreshes its weather feed from Open-Meteo (free, no API key) every
+  30 minutes.
+- **Live preview.** Every paired screen has a 👁 Preview link in the dashboard
+  that shows exactly what the screen is showing right now, without affecting
+  its online status.
+- **One-click backup.** Overview → *Download backup* streams a consistent
+  SQLite snapshot of the whole CMS (`GET /api/backup`).
 - **Raffle number draws.** Set up a draw with a ticket range (e.g. 1–200) and
   hit *Draw number*: targeted screens (whole venue or one zone) take over with
   a spinning number and reveal the winner. Draw again for "winner not
@@ -96,7 +112,7 @@ npm test           # end-to-end smoke tests (boots a real server)
 | `video`  | Full-screen muted video; advances when it ends                     |
 | `url`    | Any live web page in a sandboxed iframe                            |
 | `html`   | An inline HTML slide stored in the CMS (no assets needed)          |
-| `widget` | Built-in live-data renderer: `jackpot`, `menu`, `weather`, `sports`, `welcome` |
+| `widget` | Built-in live-data renderer: `jackpot`, `menu`, `weather`, `sports`, `birthdays`, `happyhour`, `welcome` |
 
 ## API sketch
 
@@ -114,6 +130,8 @@ POST /api/screens/:id/pair                { pairing_code }  claim a player devic
 PATCH /api/screens/:id                    { name?, zone_id?, orientation?, rotation? (0|90|180|270) }
 GET  /api/health/overview                 online/offline counts per venue
 GET  /api/events                          activity log
+GET  /api/venues/:id/reports/plays?from&to  proof-of-play report (per media + per screen)
+GET  /api/backup                          download a SQLite snapshot (?token= allowed here)
 
 # Content
 POST /api/upload?name=promo.mp4           raw body upload -> { url }
@@ -160,6 +178,9 @@ GET  /api/integrations/:venueId           current feeds
 | `KORVIX_DATA_DIR`    | `./data`            | Database + uploaded media            |
 | `KORVIX_ADMIN_TOKEN` | *(unset = open)*    | Bearer token for the admin API       |
 | `KORVIX_NO_DEMO`     | *(unset)*           | `1` skips demo venue seeding         |
+| `KORVIX_ALERT_WEBHOOK` | *(unset = off)*   | URL POSTed screen offline/recovery alerts (Slack/Teams/any JSON) |
+| `KORVIX_OFFLINE_MS`  | `90000`             | Silence before a screen counts as offline |
+| `KORVIX_PLAYS_RETENTION_DAYS` | `90`       | Proof-of-play retention              |
 
 ## Player hardware
 
@@ -169,9 +190,9 @@ walls. Portrait screens are supported per-screen via the orientation setting.
 
 ## Roadmap
 
-- Proof-of-play logging and advertising network reporting across venues
 - Multi-tenant auth (per-venue operator logins, Korvix NOC super-admin)
 - Native BEPOZ/SwiftPOS pollers (today they push to the generic webhooks)
 - Player packaging for Raspberry Pi / Android with watchdog + auto-update
 - Screen layout zones (split-screen: menu + ticker + promo)
-- Offline alert notifications (email/SMS/Slack when a screen drops)
+- Cross-venue advertising campaigns (one asset scheduled into many venues,
+  consolidated proof-of-play invoice reports)

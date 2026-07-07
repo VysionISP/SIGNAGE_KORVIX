@@ -16,6 +16,7 @@ process.env.KORVIX_DATA_DIR = tmp;
 process.env.KORVIX_DB = path.join(tmp, 'test.db');
 process.env.KORVIX_NO_DEMO = '1';
 process.env.KORVIX_ADMIN_TOKEN = '';
+process.env.KORVIX_OFFLINE_MS = '150'; // fast offline detection for the alert test
 
 const { start, server } = require('../src/server');
 
@@ -264,6 +265,74 @@ test('full venue lifecycle', async (t) => {
     assert.strictEqual(revoked.status, 404);
     const fresh = await api('GET', `/api/remote/${rotated.data.token}`);
     assert.strictEqual(fresh.status, 200);
+  });
+
+  await t.test('proof-of-play: heartbeat batch lands in the report', async () => {
+    const beat = await api('POST', `/api/player/${deviceKey}/heartbeat`, {
+      player_info: {},
+      plays: [
+        { media_id: mediaId, name: 'Taps slide', started_at: new Date().toISOString(), duration: 8.2 },
+        { media_id: mediaId, name: 'Taps slide', started_at: new Date().toISOString(), duration: 7.8 },
+        { media_id: 'bogus-no-start' }, // must be ignored, not crash
+      ],
+    });
+    assert.strictEqual(beat.status, 200);
+
+    const report = await api('GET', `/api/venues/${venueId}/reports/plays`);
+    assert.strictEqual(report.status, 200);
+    const row = report.data.media.find((m) => m.media_id === mediaId);
+    assert.strictEqual(row.plays, 2);
+    assert.strictEqual(row.seconds, 16);
+    assert.strictEqual(row.screens, 1);
+    assert.strictEqual(report.data.screens[0].plays, 2);
+    assert.strictEqual(report.data.total_plays, 2);
+  });
+
+  await t.test('offline detection alerts once, recovery clears it', async () => {
+    const monitor = require('../src/monitor');
+    // Fresh heartbeat -> not offline
+    await api('POST', `/api/player/${deviceKey}/heartbeat`, { player_info: {} });
+    assert.strictEqual(monitor.checkOffline(), 0);
+
+    // Wait past the (test-shortened) threshold -> exactly one alert
+    await new Promise((r) => setTimeout(r, 250));
+    assert.strictEqual(monitor.checkOffline(), 1);
+    assert.strictEqual(monitor.checkOffline(), 0); // no duplicate alert
+
+    let events = (await api('GET', '/api/events')).data.events;
+    assert.strictEqual(events[0].type, 'screen.offline');
+
+    // Heartbeat again -> recovered event, alert re-armed
+    await api('POST', `/api/player/${deviceKey}/heartbeat`, { player_info: {} });
+    events = (await api('GET', '/api/events')).data.events;
+    assert.strictEqual(events[0].type, 'screen.recovered');
+    assert.strictEqual(monitor.checkOffline(), 0);
+  });
+
+  await t.test('preview manifest does not affect online status', async () => {
+    const before = (await api('GET', `/api/venues/${venueId}/screens`)).data.screens[0].last_seen_at;
+    await new Promise((r) => setTimeout(r, 20));
+    await api('GET', `/api/player/${deviceKey}/manifest?preview=1`);
+    const after = (await api('GET', `/api/venues/${venueId}/screens`)).data.screens[0].last_seen_at;
+    assert.strictEqual(after, before);
+
+    await api('GET', `/api/player/${deviceKey}/manifest`);
+    const bumped = (await api('GET', `/api/venues/${venueId}/screens`)).data.screens[0].last_seen_at;
+    assert.notStrictEqual(bumped, before);
+  });
+
+  await t.test('venue location persists for auto-weather', async () => {
+    const patched = await api('PATCH', `/api/venues/${venueId}`, { latitude: -33.8688, longitude: 151.2093 });
+    assert.strictEqual(patched.data.latitude, -33.8688);
+    assert.strictEqual(patched.data.longitude, 151.2093);
+  });
+
+  await t.test('backup endpoint returns a valid SQLite snapshot', async () => {
+    const res = await fetch(base + '/api/backup');
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-disposition'), /korvix-backup-.*\.db/);
+    const buf = Buffer.from(await res.arrayBuffer());
+    assert.strictEqual(buf.subarray(0, 15).toString(), 'SQLite format 3');
   });
 
   await t.test('unpair returns player to pending', async () => {

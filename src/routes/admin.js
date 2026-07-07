@@ -3,11 +3,12 @@
 // Admin/CMS API: venues, zones, screens, media, playlists, schedules,
 // emergency broadcast and fleet health. Consumed by the dashboard SPA.
 
+const path = require('node:path');
+const fs = require('node:fs');
 const db = require('../db');
 const sse = require('../sse');
 const { sendJson, readJson, HttpError, required } = require('../util');
-
-const OFFLINE_AFTER_MS = 90 * 1000; // no heartbeat for 90s -> offline
+const { OFFLINE_AFTER_MS } = require('../monitor');
 
 function nudgeVenue(venueId) {
   const keys = db.all(
@@ -51,20 +52,32 @@ route('GET', '/api/venues', (req, res) => {
   sendJson(res, 200, { venues });
 });
 
+function numOrNull(value) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 route('POST', '/api/venues', async (req, res) => {
   const body = await readJson(req);
   required(body, 'name');
   const venueId = db.id();
-  db.run('INSERT INTO venues (id, name, timezone, address, created_at) VALUES (?, ?, ?, ?, ?)',
-    venueId, body.name, body.timezone || 'Australia/Sydney', body.address || '', db.now());
+  db.run('INSERT INTO venues (id, name, timezone, address, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    venueId, body.name, body.timezone || 'Australia/Sydney', body.address || '',
+    numOrNull(body.latitude), numOrNull(body.longitude), db.now());
   sendJson(res, 201, db.get('SELECT * FROM venues WHERE id = ?', venueId));
 });
 
 route('PATCH', '/api/venues/:id', async (req, res, params) => {
   const venue = mustFind(db.get('SELECT * FROM venues WHERE id = ?', params.id), 'venue');
   const body = await readJson(req);
-  db.run('UPDATE venues SET name = ?, timezone = ?, address = ? WHERE id = ?',
-    body.name ?? venue.name, body.timezone ?? venue.timezone, body.address ?? venue.address, venue.id);
+  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, latitude = ?, longitude = ? WHERE id = ?',
+    body.name ?? venue.name, body.timezone ?? venue.timezone, body.address ?? venue.address,
+    body.latitude !== undefined ? numOrNull(body.latitude) : venue.latitude,
+    body.longitude !== undefined ? numOrNull(body.longitude) : venue.longitude,
+    venue.id);
+  if (body.latitude !== undefined || body.longitude !== undefined) {
+    require('../monitor').refreshWeather(); // async, fire-and-forget
+  }
   sendJson(res, 200, db.get('SELECT * FROM venues WHERE id = ?', venue.id));
 });
 
@@ -457,6 +470,63 @@ route('GET', '/api/health/overview', (req, res) => {
 
 route('GET', '/api/events', (req, res) => {
   sendJson(res, 200, { events: db.all('SELECT * FROM events ORDER BY id DESC LIMIT 100') });
+});
+
+// ---- Proof-of-play reporting ---------------------------------------------------
+//
+// Players report every item they actually displayed; this aggregates it for a
+// date range (UTC days). The per-media table is the evidence base for the
+// cross-venue advertising network: "your promo ran N times for M minutes".
+
+route('GET', '/api/venues/:venueId/reports/plays', (req, res, params, url) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 6 * 86400 * 1000).toISOString().slice(0, 10);
+  const from = (url.searchParams.get('from') || weekAgo).slice(0, 10);
+  const to = (url.searchParams.get('to') || today).slice(0, 10);
+  const lo = `${from}T00:00:00.000Z`;
+  const hi = `${to}T23:59:59.999Z`;
+
+  const media = db.all(
+    `SELECT media_id, media_name,
+            COUNT(*) AS plays,
+            ROUND(SUM(duration_seconds)) AS seconds,
+            COUNT(DISTINCT screen_id) AS screens
+     FROM plays WHERE venue_id = ? AND started_at >= ? AND started_at <= ?
+     GROUP BY media_id, media_name ORDER BY plays DESC`, params.venueId, lo, hi);
+
+  const screens = db.all(
+    `SELECT p.screen_id, COALESCE(s.name, '(removed screen)') AS screen_name,
+            COUNT(*) AS plays, ROUND(SUM(p.duration_seconds)) AS seconds
+     FROM plays p LEFT JOIN screens s ON s.id = p.screen_id
+     WHERE p.venue_id = ? AND p.started_at >= ? AND p.started_at <= ?
+     GROUP BY p.screen_id ORDER BY plays DESC`, params.venueId, lo, hi);
+
+  sendJson(res, 200, {
+    from, to,
+    total_plays: media.reduce((n, m) => n + m.plays, 0),
+    total_seconds: media.reduce((n, m) => n + (m.seconds || 0), 0),
+    media, screens,
+  });
+});
+
+// ---- Backup ----------------------------------------------------------------------
+
+// Downloads a consistent snapshot of the whole CMS database.
+route('GET', '/api/backup', (req, res) => {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const tmp = path.join(db.DATA_DIR, `.backup-${process.pid}-${Date.now()}.db`);
+  db.open().exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+  const size = fs.statSync(tmp).size;
+  res.writeHead(200, {
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': size,
+    'Content-Disposition': `attachment; filename="korvix-backup-${stamp}.db"`,
+  });
+  const stream = fs.createReadStream(tmp);
+  const cleanup = () => fs.unlink(tmp, () => {});
+  stream.on('close', cleanup);
+  stream.on('error', cleanup);
+  stream.pipe(res);
 });
 
 module.exports = { routes, nudgeVenue, nudgeAll, screenStatus, OFFLINE_AFTER_MS };

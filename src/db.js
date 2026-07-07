@@ -135,6 +135,20 @@ CREATE TABLE IF NOT EXISTS draws (
   drawn_at TEXT
 );
 
+-- Proof-of-play: one row per content item actually shown on a screen.
+-- Powers reporting for venue promos and the cross-venue advertising network.
+CREATE TABLE IF NOT EXISTS plays (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  venue_id TEXT NOT NULL,
+  screen_id TEXT NOT NULL,
+  media_id TEXT NOT NULL,
+  media_name TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL,
+  duration_seconds REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_plays_venue_time ON plays (venue_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_plays_time ON plays (started_at);
+
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   venue_id TEXT,
@@ -163,10 +177,19 @@ function migrate() {
   if (!screenCols.includes('rotation')) {
     db.exec('ALTER TABLE screens ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0');
   }
+  if (!screenCols.includes('alerted')) {
+    // 1 while an offline alert is outstanding, so we alert once per outage.
+    db.exec('ALTER TABLE screens ADD COLUMN alerted INTEGER NOT NULL DEFAULT 0');
+  }
   const venueCols = db.prepare('PRAGMA table_info(venues)').all().map((c) => c.name);
   if (!venueCols.includes('remote_token')) {
     // Bearer for the staff remote app; NULL until an admin generates one.
     db.exec('ALTER TABLE venues ADD COLUMN remote_token TEXT');
+  }
+  if (!venueCols.includes('latitude')) {
+    // Set to enable automatic weather feeds (Open-Meteo, no API key needed).
+    db.exec('ALTER TABLE venues ADD COLUMN latitude REAL');
+    db.exec('ALTER TABLE venues ADD COLUMN longitude REAL');
   }
 }
 

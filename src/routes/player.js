@@ -13,6 +13,7 @@ const db = require('../db');
 const sse = require('../sse');
 const { sendJson, readJson, HttpError } = require('../util');
 const { buildManifest } = require('../scheduler');
+const { markSeen } = require('../monitor');
 
 const routes = [];
 function route(method, pattern, handler) { routes.push({ method, pattern, handler }); }
@@ -38,7 +39,7 @@ route('POST', '/api/player/hello', async (req, res) => {
   if (deviceKey) {
     const screen = findScreen(deviceKey);
     if (screen) {
-      db.run('UPDATE screens SET last_seen_at = ?, player_info = ? WHERE id = ?', db.now(), info, screen.id);
+      markSeen(screen, info);
       sendJson(res, 200, { status: 'paired', device_key: deviceKey, screen_id: screen.id });
       return;
     }
@@ -57,10 +58,11 @@ route('POST', '/api/player/hello', async (req, res) => {
   sendJson(res, 200, { status: 'pending', device_key: newKey, pairing_code: code });
 });
 
-route('GET', '/api/player/:deviceKey/manifest', (req, res, params) => {
+route('GET', '/api/player/:deviceKey/manifest', (req, res, params, url) => {
   const screen = findScreen(params.deviceKey);
   if (!screen) throw new HttpError(404, 'device not paired');
-  db.run('UPDATE screens SET last_seen_at = ? WHERE id = ?', db.now(), screen.id);
+  // Dashboard live-preview fetches must not look like player activity.
+  if (url?.searchParams.get('preview') !== '1') markSeen(screen);
   sendJson(res, 200, buildManifest(screen));
 });
 
@@ -68,12 +70,17 @@ route('POST', '/api/player/:deviceKey/heartbeat', async (req, res, params) => {
   const screen = findScreen(params.deviceKey);
   if (!screen) throw new HttpError(404, 'device not paired');
   const body = await readJson(req);
-  const wasOffline = screen.last_seen_at
-    && (Date.now() - Date.parse(screen.last_seen_at)) > 90 * 1000;
-  db.run('UPDATE screens SET last_seen_at = ?, player_info = ? WHERE id = ?',
-    db.now(), JSON.stringify(body.player_info || {}), screen.id);
-  if (wasOffline) {
-    db.logEvent('screen.recovered', { venueId: screen.venue_id, screenId: screen.id, detail: screen.name });
+  markSeen(screen, JSON.stringify(body.player_info || {}));
+
+  // Proof-of-play batch piggybacked on the heartbeat.
+  if (Array.isArray(body.plays)) {
+    for (const play of body.plays.slice(0, 500)) {
+      if (!play || !play.media_id || !play.started_at) continue;
+      db.run(
+        'INSERT INTO plays (venue_id, screen_id, media_id, media_name, started_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?)',
+        screen.venue_id, screen.id, String(play.media_id), String(play.name || ''),
+        String(play.started_at), Math.max(0, Number(play.duration) || 0));
+    }
   }
   sendJson(res, 200, { ok: true });
 });

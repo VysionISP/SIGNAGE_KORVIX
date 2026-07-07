@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const db = require('./db');
 const { sendJson, readBody, HttpError } = require('./util');
 const seedDemo = require('./seed');
+const monitor = require('./monitor');
 
 const adminRoutes = require('./routes/admin').routes;
 const playerRoutes = require('./routes/player').routes;
@@ -75,9 +76,11 @@ function requiresAdminAuth(pathname) {
   return true;
 }
 
-function isAuthorized(req) {
+function isAuthorized(req, url) {
   const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+  let token = header.startsWith('Bearer ') ? header.slice(7) : header;
+  // Browser downloads (<a href>) can't set headers; allow ?token= for backup only.
+  if (!token && url.pathname === '/api/backup') token = url.searchParams.get('token') || '';
   if (token.length !== ADMIN_TOKEN.length) return false;
   return crypto.timingSafeEqual(Buffer.from(token), Buffer.from(ADMIN_TOKEN));
 }
@@ -127,7 +130,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (pathname.startsWith('/api/')) {
-      if (requiresAdminAuth(pathname) && !isAuthorized(req)) {
+      if (requiresAdminAuth(pathname) && !isAuthorized(req, url)) {
         throw new HttpError(401, 'admin token required');
       }
       if (pathname === '/api/upload' && req.method === 'POST') {
@@ -166,6 +169,7 @@ function start(port = PORT, host = HOST) {
     seedDemo();
     console.log('[korvix] empty database — seeded "The Korvix Tavern" demo venue');
   }
+  monitor.start();
   return new Promise((resolve) => {
     server.listen(port, host, () => {
       const addr = server.address();

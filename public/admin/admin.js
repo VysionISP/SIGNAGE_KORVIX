@@ -94,7 +94,7 @@
     const renderers = {
       overview: renderOverview, screens: renderScreens, content: renderContent,
       playlists: renderPlaylists, schedules: renderSchedules, draws: renderDraws,
-      emergency: renderEmergency, integrations: renderIntegrations,
+      emergency: renderEmergency, integrations: renderIntegrations, reports: renderReports,
     };
     await renderers[activeTab]();
     await renderBanner();
@@ -133,7 +133,12 @@
       </div>
       <h2>Screens — ${esc(venue().name)}</h2>
       ${screenTable(health.find((h) => h.id === venueId)?.screens || [])}
-      <h2>Recent activity</h2>
+      <div class="row" style="margin-top:16px">
+        <h2 style="margin:0">Recent activity</h2>
+        <div class="spacer"></div>
+        <a class="btn small secondary" download style="text-decoration:none"
+           href="/api/backup${localStorage.getItem('korvix.token') ? `?token=${encodeURIComponent(localStorage.getItem('korvix.token'))}` : ''}">⬇ Download backup</a>
+      </div>
       <table><tbody>
         ${events.slice(0, 12).map((e) => `
           <tr><td class="muted" style="white-space:nowrap">${new Date(e.created_at).toLocaleString()}</td>
@@ -187,7 +192,8 @@
             <td class="muted">${s.last_seen_at ? new Date(s.last_seen_at).toLocaleString() : '—'}</td>
             <td class="row" style="justify-content:flex-end">
               ${s.device_key
-                ? `<button class="btn small secondary" data-act="unpair" data-id="${s.id}">Unpair</button>`
+                ? `<a class="btn small secondary" href="/player/?preview=${esc(s.device_key)}" target="_blank" style="text-decoration:none">👁 Preview</a>
+                   <button class="btn small secondary" data-act="unpair" data-id="${s.id}">Unpair</button>`
                 : `<button class="btn small" data-act="pair" data-id="${s.id}">Pair device</button>`}
               <button class="btn small danger" data-act="del-screen" data-id="${s.id}">Delete</button>
             </td>
@@ -295,7 +301,7 @@
         </div>
         <div class="form-grid">
           <label id="md-src-wrap">Source URL / widget name
-            <input id="md-src" placeholder="https://… or /uploads/… — widgets: jackpot, menu, weather, sports, welcome"></label>
+            <input id="md-src" placeholder="https://… or /uploads/… — widgets: jackpot, menu, weather, sports, birthdays, happyhour, welcome"></label>
           <label>Or upload a file<input id="md-file" type="file" accept="image/*,video/*"></label>
         </div>
         <label style="display:block;margin-bottom:10px" id="md-html-wrap">HTML slide markup
@@ -660,7 +666,21 @@
   async function renderIntegrations() {
     const { feeds } = await api('GET', `/api/integrations/${venueId}`);
     const base = location.origin;
+    const v = venue();
     $('#tab-integrations').innerHTML = `
+      <h2>Automatic weather 🌤</h2>
+      <div class="card">
+        <p class="muted" style="margin-top:0">Set the venue's coordinates and the CMS refreshes the weather feed
+        itself every 30 minutes (Open-Meteo, free, no API key). Screens using the weather widget update automatically.</p>
+        <div class="row">
+          <label class="muted">Latitude <input id="wx-lat" type="number" step="0.0001" value="${v.latitude ?? ''}" placeholder="-33.87" style="width:130px"></label>
+          <label class="muted">Longitude <input id="wx-lon" type="number" step="0.0001" value="${v.longitude ?? ''}" placeholder="151.21" style="width:130px"></label>
+          <button class="btn small" id="wx-save">Save location</button>
+          ${feeds.find((f) => f.source === 'weather')?.payload?.source === 'open-meteo'
+            ? '<span class="pill online">auto-updating</span>' : ''}
+        </div>
+      </div>
+
       <h2>Live data feeds</h2>
       <p class="muted">POS, gaming, weather and other systems push JSON here; widgets on screen render it live. Any update refreshes affected screens instantly.</p>
       <div class="cards">
@@ -686,7 +706,79 @@ curl -X POST ${base}/api/integrations/${venueId}/weather \\
 
 # Sports fixtures
 curl -X POST ${base}/api/integrations/${venueId}/sports \\
-  -d '{"fixtures":[{"league":"AFL","match":"Swans v Magpies","when":"Fri 7:40pm"}]}'</pre>`;
+  -d '{"fixtures":[{"league":"AFL","match":"Swans v Magpies","when":"Fri 7:40pm"}]}'
+
+# Membership system — birthdays widget
+curl -X POST ${base}/api/integrations/${venueId}/membership \\
+  -d '{"birthdays":[{"name":"Karen M."},{"name":"Dave T."}]}'</pre>`;
+
+    $('#wx-save').onclick = async () => {
+      await api('PATCH', `/api/venues/${venueId}`, {
+        latitude: $('#wx-lat').value || null,
+        longitude: $('#wx-lon').value || null,
+      });
+      await refresh();
+    };
+  }
+
+  // ---- proof-of-play reports -------------------------------------------------------------
+
+  let reportRange = null;
+
+  async function renderReports() {
+    const today = new Date().toISOString().slice(0, 10);
+    const weekAgo = new Date(Date.now() - 6 * 86400 * 1000).toISOString().slice(0, 10);
+    if (!reportRange) reportRange = { from: weekAgo, to: today };
+    const report = await api('GET',
+      `/api/venues/${venueId}/reports/plays?from=${reportRange.from}&to=${reportRange.to}`);
+    const mins = (s) => Math.round((s || 0) / 60).toLocaleString();
+
+    $('#tab-reports').innerHTML = `
+      <h2>Proof of play</h2>
+      <p class="muted">Every item actually shown on screen is logged by the players — the evidence base for supplier
+      campaigns and the cross-venue advertising network. Retained ${'90'} days.</p>
+      <div class="row card" style="margin-bottom:14px">
+        <label class="muted">From <input type="date" id="rp-from" value="${reportRange.from}"></label>
+        <label class="muted">To <input type="date" id="rp-to" value="${reportRange.to}"></label>
+        <button class="btn small" id="rp-run">Run report</button>
+        <div class="spacer"></div>
+        <div class="muted">${report.total_plays.toLocaleString()} plays · ${mins(report.total_seconds)} minutes on screen</div>
+        <button class="btn small secondary" id="rp-csv" ${report.media.length ? '' : 'disabled'}>Download CSV</button>
+      </div>
+
+      <h2>By content</h2>
+      <table>
+        <thead><tr><th>Content</th><th>Plays</th><th>Minutes on screen</th><th>Screens reached</th></tr></thead>
+        <tbody>${report.media.map((m) => `
+          <tr><td>${esc(m.media_name)}</td><td>${m.plays.toLocaleString()}</td>
+          <td>${mins(m.seconds)}</td><td>${m.screens}</td></tr>`).join('')
+          || '<tr><td class="muted" colspan="4">No plays recorded in this range yet — data appears once players report in.</td></tr>'}
+        </tbody>
+      </table>
+
+      <h2>By screen</h2>
+      <table>
+        <thead><tr><th>Screen</th><th>Plays</th><th>Minutes on screen</th></tr></thead>
+        <tbody>${report.screens.map((s) => `
+          <tr><td>${esc(s.screen_name)}</td><td>${s.plays.toLocaleString()}</td><td>${mins(s.seconds)}</td></tr>`).join('')
+          || '<tr><td class="muted" colspan="3">No data</td></tr>'}
+        </tbody>
+      </table>`;
+
+    $('#rp-run').onclick = () => {
+      reportRange = { from: $('#rp-from').value || weekAgo, to: $('#rp-to').value || today };
+      render();
+    };
+    $('#rp-csv').onclick = () => {
+      const rows = [['content', 'plays', 'seconds_on_screen', 'screens_reached'],
+        ...report.media.map((m) => [m.media_name, m.plays, m.seconds || 0, m.screens])];
+      const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      a.download = `korvix-proof-of-play-${reportRange.from}-to-${reportRange.to}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
   }
 
   // ---- boot -------------------------------------------------------------------------------

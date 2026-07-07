@@ -13,8 +13,8 @@ function slide(bg, body) {
 function seedDemo() {
   const now = db.now();
   const venueId = db.id();
-  db.run('INSERT INTO venues (id, name, timezone, address, created_at) VALUES (?, ?, ?, ?, ?)',
-    venueId, 'The Korvix Tavern', 'Australia/Sydney', '42 Demo Street, Sydney NSW', now);
+  db.run('INSERT INTO venues (id, name, timezone, address, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    venueId, 'The Korvix Tavern', 'Australia/Sydney', '42 Demo Street, Sydney NSW', -33.8688, 151.2093, now);
 
   const zoneNames = ['Entrance', 'Main Bar', 'Bistro', 'Gaming Room', 'Sports Bar', 'Function Room'];
   const zones = {};
@@ -84,6 +84,8 @@ function seedDemo() {
         '<h1 style="font-size:6vw;margin:.2em 0">POKER NIGHT</h1><div style="font-size:3vw">Thursdays from 9pm</div><div style="font-size:2.4vw;margin-top:.8em;opacity:.9">$1,000 prize pool &middot; register at the bar</div>'),
     }),
     jackpot: media('Gaming jackpot (live feed)', 'widget', { src: 'jackpot', duration: 12 }),
+    birthdays: media('Member birthdays (live feed)', 'widget', { src: 'birthdays', duration: 10 }),
+    happyHourCountdown: media('Happy hour countdown (live)', 'widget', { src: 'happyhour', duration: 10 }),
     rgMessage: media('Responsible gambling message', 'html', {
       duration: 8,
       content: slide('#1a1a1a',
@@ -115,8 +117,8 @@ function seedDemo() {
   }
 
   const p = {
-    entrance: playlist('Entrance loop', [m.welcome, m.membership, m.liveMusic, m.weather, m.functions]),
-    barDay: playlist('Bar — daytime', [m.taps, m.weather, m.liveMusic, m.membership]),
+    entrance: playlist('Entrance loop', [m.welcome, m.membership, m.birthdays, m.liveMusic, m.weather, m.functions]),
+    barDay: playlist('Bar — daytime', [m.taps, m.weather, m.happyHourCountdown, m.liveMusic, m.membership]),
     barHappy: playlist('Bar — happy hour', [m.happyHour, m.taps, m.liveMusic]),
     barNight: playlist('Bar — evening', [m.taps, m.liveMusic, m.poker, m.membership]),
     breakfast: playlist('Bistro — breakfast', [m.breakfast, m.weather]),
@@ -170,6 +172,9 @@ function seedDemo() {
     ],
     sold_out: ['Pumpkin Risotto'],
     happy_hour: { active: false, from: '15:00', to: '18:00' },
+  });
+  feed('membership', {
+    birthdays: [{ name: 'Karen M.' }, { name: 'Dave T.' }, { name: 'Robbo' }],
   });
   feed('sports', {
     fixtures: [
