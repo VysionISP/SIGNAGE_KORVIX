@@ -14,7 +14,12 @@ const parse = (s, fallback) => { try { return JSON.parse(s); } catch { return fa
 
 function createWheel(venueId, opts = {}) {
   const wedges = (Array.isArray(opts.wedges) ? opts.wedges : [])
-    .map((w) => ({ label: String(w.label || '').trim().slice(0, 40), weight: Math.max(0, Number(w.weight) || 1) }))
+    .map((w) => {
+      const n = Number(w.weight);
+      // Missing/garbage weight defaults to 1; an explicit 0 must STAY 0
+      // ("never wins"), so no `|| 1` coercion here.
+      return { label: String(w.label || '').trim().slice(0, 40), weight: Number.isFinite(n) ? Math.max(0, n) : 1 };
+    })
     .filter((w) => w.label);
   if (wedges.length < 2 || wedges.length > 24) throw new HttpError(400, 'wheel needs 2-24 wedges');
   if (!wedges.some((w) => w.weight > 0)) throw new HttpError(400, 'at least one wedge needs a weight above 0');
