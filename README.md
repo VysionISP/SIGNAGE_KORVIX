@@ -126,13 +126,15 @@ npm test           # end-to-end smoke tests (boots a real server)
   marketing webhook fires a ready-to-post blurb on every event (new game,
   go-live, jackpot roll-up, win) — point it at Zapier/Make to hit socials
   and email automatically.
-- **Staff remote app (`/remote/`).** An installable PWA so bar staff run
-  draws from their phone with no dashboard access. From Dashboard → Draws,
-  generate the staff link and send it to staff; opening it on Android
-  (Chrome) or iPhone (Safari) offers *Add to Home Screen*, installing it as
-  the **Korvix Draws** app — full-screen, own icon, no app store. It auths
-  by a per-venue token; generating a new link instantly revokes every phone
-  holding the old one.
+- **Games console (`/games/<token>`).** Games are run exclusively from an
+  installable PWA on the venue's tablet or a staff phone — the dashboard is
+  for setup and monitoring only. From Dashboard → Draws, generate the
+  venue's console link and set it on the tablet; *Add to Home Screen*
+  installs it as the **Korvix Games** app — full-screen, own icon, no app
+  store, no dashboard login. Staff spin raffle draws and run CashKing
+  (go live, reveal the winner's card, end session) with big touch controls.
+  It auths by a per-venue token; generating a new link instantly revokes
+  every device holding the old one.
 - **Screen rotation.** Panels mounted sideways off a landscape-output player
   box are handled per screen: set 0/90/180/270° in the dashboard and the
   player rotates its whole output instantly.
@@ -205,12 +207,14 @@ POST /api/card-games/:id/end-session      screens back to scheduled content
 POST /api/card-games/:id/archive | PATCH /api/card-games/:id
 GET  /api/public/cashking/:token          public promo JSON (no auth — website embeds)
 
-# Staff remote (phone app; token-authed, no admin login)
-POST /api/venues/:id/remote-token         generate/rotate the staff link (rotation revokes old)
-GET  /api/remote/:token                   venue, zones and draws for the app
-POST /api/remote/:token/draws             create a draw from the phone
-POST /api/remote/:token/draws/:id/draw    spin from the phone
-POST /api/remote/:token/draws/:id/clear   clear screens from the phone
+# Games console (tablet/phone app; token-authed, no admin login)
+POST /api/venues/:id/remote-token         generate/rotate the console link (rotation revokes old)
+GET  /api/remote/:token                   venue, zones, draws and CashKing state
+POST /api/remote/:token/draws             create a draw from the console
+POST /api/remote/:token/draws/:id/draw    spin a draw
+POST /api/remote/:token/draws/:id/clear   clear draw from screens
+POST /api/remote/:token/card-games/:id/live|pick|end-session   run CashKing
+GET  /games/:token                        clean URL to set on the venue tablet
 
 # Player protocol
 POST /api/player/hello                    { device_key? } -> paired | pending+code

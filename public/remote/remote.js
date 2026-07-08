@@ -43,7 +43,7 @@
 
   async function load() {
     if (!token) {
-      showError('No access link. Ask your manager for the Draws app link from the Korvix dashboard.', true);
+      showError('No access link. Ask your manager for the games console link from the Korvix dashboard.', true);
       return;
     }
     try {
@@ -54,7 +54,7 @@
       render();
     } catch (err) {
       if (err.status === 404) {
-        showError('This link has been revoked. Ask your manager for a new Draws app link.', true);
+        showError('This link has been revoked. Ask your manager for a new games console link.', true);
       } else {
         $('conn-state').textContent = 'offline — retrying…';
       }

@@ -682,24 +682,24 @@
     const remoteUrl = remote && remote.url ? location.origin + remote.url : null;
 
     $('#tab-draws').innerHTML = `
-      ${remote === null ? '' : `<h2>Staff remote app 📱</h2>
+      ${remote === null ? '' : `<h2>Games console (venue tablet) 🎰</h2>
       <div class="card">
-        <p class="muted" style="margin-top:0">Bar staff run draws from their phone — no dashboard login.
-        Send them this link; opening it in Chrome on Android (or Safari on iPhone) offers
-        <b>Add to Home Screen</b>, which installs it as the <b>Korvix Draws</b> app.
-        Generating a new link instantly cuts off the old one.</p>
+        <p class="muted" style="margin-top:0"><b>All games are run from this URL</b> — raffle draws and CashKing.
+        Set it once on the venue's tablet (or a staff phone): open it in Chrome/Safari and use
+        <b>Add to Home Screen</b> to install it as the <b>Korvix Games</b> app. No dashboard login needed.
+        Generating a new link instantly cuts off every device using the old one.</p>
         <div class="row">
           ${remoteUrl
             ? `<input readonly id="remote-url" value="${esc(remoteUrl)}" style="flex:1;min-width:280px;font-family:monospace;font-size:12px">
                <button class="btn small secondary" id="remote-copy">Copy link</button>
                <button class="btn small secondary" id="remote-rotate">Generate new link (revoke old)</button>`
-            : '<button class="btn" id="remote-rotate">Generate staff app link</button>'}
+            : '<button class="btn" id="remote-rotate">Generate games console link</button>'}
         </div>
       </div>`}
 
       <h2>Raffle number draws</h2>
-      <p class="muted">Set up a ticket range, then hit <b>Draw number</b> — targeted screens take over with a spinning number and reveal the winner.
-      Draw again for “winner not present”: a number is never repeated within the same draw. <b>Clear</b> returns screens to normal content.</p>
+      <p class="muted">Set up ticket ranges here; staff <b>run the draws from the games console</b> on the venue tablet.
+      Screens take over with a spinning reel reveal. A number is never repeated within the same draw.</p>
 
       <h2>New draw</h2>
       <div class="form-grid card">
@@ -728,9 +728,6 @@
               : '<span class="muted">—</span>'}</td>
             <td><span class="pill ${d.status === 'live' ? 'online' : d.status === 'ready' ? 'unpaired' : 'never-connected'}">${d.status}</span></td>
             <td style="text-align:right;white-space:nowrap">
-              <button class="btn small" data-act="spin" data-id="${d.id}" ${d.remaining <= 0 ? 'disabled' : ''}>
-                ${d.drawn_numbers.length ? 'Draw again' : 'Draw number'}</button>
-              ${d.status === 'live' ? `<button class="btn small secondary" data-act="clear" data-id="${d.id}">Clear</button>` : ''}
               <button class="btn small danger" data-act="del" data-id="${d.id}">✕</button>
             </td>
           </tr>`).join('') || '<tr><td class="muted" colspan="6">No draws yet</td></tr>'}
@@ -766,18 +763,9 @@
     $('#tab-draws').onclick = async (e) => {
       const el = e.target.closest('[data-act]');
       if (!el) return;
-      const { act, id } = el.dataset;
-      if (act === 'spin') {
-        await api('POST', `/api/draws/${id}/draw`);
+      if (el.dataset.act === 'del' && confirm('Delete this draw and its history?')) {
+        await api('DELETE', `/api/draws/${el.dataset.id}`);
         render();
-      } else if (act === 'clear') {
-        await api('POST', `/api/draws/${id}/clear`);
-        render();
-      } else if (act === 'del') {
-        if (confirm('Delete this draw and its history?')) {
-          await api('DELETE', `/api/draws/${id}`);
-          render();
-        }
       }
     };
   }
@@ -814,7 +802,9 @@
       <h2>CashKing 🃏 <span class="muted" style="font-weight:400;font-size:13px">digital Jag the Joker</span></h2>
       <p class="muted">53 shuffled cards on every screen in the venue. One card revealed per game night —
       a miss rolls the jackpot up by your increment, the Joker wins it. Card faces stay on the server until
-      revealed, so the board can't be cheated. Staff can run the whole game from the phone app.</p>
+      revealed, so the board can't be cheated. <b>The game is run from the games console</b> on the venue
+      tablet (link on the Draws tab) — go live, reveal the winner's card, end the session. This page is for
+      setup and monitoring.</p>
 
       ${current ? `
       <div class="card">
@@ -826,15 +816,12 @@
           <div style="font-size:24px;font-weight:800;color:var(--warn)">${moneyAud(current.jackpot)}</div>
         </div>
         ${current.won ? `<p style="color:var(--warn);font-weight:700">🎉 Joker found — ${moneyAud(current.jackpot)} won! Archive this game to start a new one.</p>` : ''}
-        ${ckBoardHtml(current, true)}
+        ${ckBoardHtml(current, false)}
         <div class="row">
-          ${current.live
-            ? '<button class="btn danger" data-ck="end">End session — screens back to normal</button>'
-            : `<button class="btn" data-ck="live">🔴 GO LIVE — show board on all screens</button>`}
           <button class="btn small secondary" data-ck="edit">Edit jackpot / schedule / webhook</button>
           <button class="btn small secondary" data-ck="archive">Archive game</button>
         </div>
-        <p class="muted" style="margin-bottom:0">Click a face-down card to reveal it (the winner's pick).
+        <p class="muted" style="margin-bottom:0">Go live and reveal cards from the <b>games console</b> (venue tablet).
         Increment per miss: ${moneyAud(current.jackpot_increment)}.</p>
         <h2 style="font-size:14px">Automated promotion</h2>
         <div class="muted" style="font-size:13px">
@@ -878,21 +865,9 @@
     };
 
     $('#tab-cashking').onclick = async (e) => {
-      const pick = e.target.closest('[data-pick]');
-      if (pick && current) {
-        const n = parseInt(pick.dataset.pick, 10);
-        if (!confirm(`Reveal card #${n + 1} on all screens?`)) return;
-        const result = await api('POST', `/api/card-games/${current.id}/pick`, { index: n });
-        if (result.was_joker) alert(`🎉 THE JOKER! ${moneyAud(result.jackpot)} WON!`);
-        return render();
-      }
       const act = e.target.closest('[data-ck]');
       if (!act || !current) return;
-      if (act.dataset.ck === 'live') {
-        await api('POST', `/api/card-games/${current.id}/live`);
-      } else if (act.dataset.ck === 'end') {
-        await api('POST', `/api/card-games/${current.id}/end-session`);
-      } else if (act.dataset.ck === 'archive') {
+      if (act.dataset.ck === 'archive') {
         if (!confirm('Archive this game? It disappears from screens and the public feed.')) return;
         await api('POST', `/api/card-games/${current.id}/archive`);
       } else if (act.dataset.ck === 'edit') {

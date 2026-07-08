@@ -151,6 +151,13 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
 
+    // Clean games-console URL for venue tablets: /games/<venue-token>
+    if (pathname.startsWith('/games/')) {
+      const token = pathname.split('/')[2] || '';
+      res.writeHead(302, { Location: `/remote/?t=${encodeURIComponent(token)}` });
+      return res.end();
+    }
+
     const file = safeJoin(PUBLIC_DIR, pathname);
     if (file && serveFile(res, file, false)) return;
     throw new HttpError(404, 'not found');

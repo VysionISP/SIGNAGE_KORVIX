@@ -484,13 +484,13 @@ route('POST', '/api/venues/:id/remote-token', (req, res, params) => {
   const token = crypto.randomBytes(16).toString('hex');
   db.run('UPDATE venues SET remote_token = ? WHERE id = ?', token, venue.id);
   db.logEvent('remote.token_rotated', { venueId: venue.id, detail: venue.name });
-  sendJson(res, 200, { token, url: `/remote/?t=${token}` });
+  sendJson(res, 200, { token, url: `/games/${token}` });
 });
 
 route('GET', '/api/venues/:id/remote-token', (req, res, params) => {
   const venue = auth.assertVenue(req.user, params.id, 'admin');
   sendJson(res, 200, venue.remote_token
-    ? { token: venue.remote_token, url: `/remote/?t=${venue.remote_token}` }
+    ? { token: venue.remote_token, url: `/games/${venue.remote_token}` }
     : { token: null, url: null });
 });
 

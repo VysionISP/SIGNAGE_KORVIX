@@ -1,7 +1,7 @@
 {
-  "name": "Korvix Draws",
-  "short_name": "Draws",
-  "description": "Staff remote for Korvix Signage raffle draws",
+  "name": "Korvix Games",
+  "short_name": "Games",
+  "description": "Venue games console for Korvix Signage — raffle draws and CashKing",
   "start_url": "/remote/",
   "scope": "/remote/",
   "display": "standalone",
