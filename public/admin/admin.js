@@ -372,12 +372,21 @@
     return `<div style="width:86px;height:52px;border-radius:6px;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:22px">${icon}</div>`;
   }
 
+  // Raw-body upload with the session attached (api() is JSON-only).
+  function uploadFile(file) {
+    return fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: sessionToken() ? { Authorization: `Bearer ${sessionToken()}` } : {},
+      body: file,
+    });
+  }
+
   // Upload files and auto-create a media entry for each. Returns error names.
   async function uploadGraphics(files) {
     const failed = [];
     for (const file of files) {
       try {
-        const up = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+        const up = await uploadFile(file);
         const uploaded = await up.json();
         if (!up.ok) throw new Error(uploaded.error || up.status);
         const isVideo = /^video\//.test(file.type) || /\.(mp4|webm)$/i.test(file.name);
@@ -475,7 +484,7 @@
       let src = $('#md-src').value.trim();
       const file = $('#md-file').files[0];
       if (file) {
-        const up = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+        const up = await uploadFile(file);
         const uploaded = await up.json();
         if (!up.ok) return alert('Upload failed: ' + (uploaded.error || up.status));
         src = uploaded.url;
