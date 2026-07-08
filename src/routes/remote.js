@@ -45,6 +45,20 @@ route('GET', '/api/remote/:token', (req, res, params) => {
   });
 });
 
+// One tap: end every game takeover and put all screens back on their
+// scheduled content. Deliberately does NOT touch emergencies — those clear
+// only via their explicit all-clear.
+route('POST', '/api/remote/:token/return-to-advertising', (req, res, params) => {
+  const venue = venueForToken(params.token);
+  const draws = db.run("UPDATE draws SET status = 'cleared' WHERE venue_id = ? AND status = 'live'", venue.id).changes;
+  const games = db.run('UPDATE card_games SET live = 0 WHERE venue_id = ? AND live = 1', venue.id).changes;
+  if (draws || games) {
+    db.logEvent('screens.returned', { venueId: venue.id, detail: `back to advertising (staff remote)` });
+    nudgeVenue(venue.id);
+  }
+  sendJson(res, 200, { ok: true, cleared: { draws, card_games: games } });
+});
+
 // ---- Emergency broadcast from the venue tablet ---------------------------------
 //
 // Venue-scoped only: the tablet can take over its own venue's screens, never

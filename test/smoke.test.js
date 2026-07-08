@@ -686,6 +686,33 @@ test('CashKing digital card game', async (t) => {
     assert.strictEqual(fresh.data.jackpot, 750);
   });
 
+  await t.test('return-to-advertising clears game takeovers but not emergencies', async () => {
+    const tok = (await api('POST', `/api/venues/${venueId}/remote-token`)).data.token;
+    // Put a draw and the card game live
+    const draw = await api('POST', `/api/remote/${tok}/draws`, { name: 'RTA test', range_start: 1, range_end: 9 }, null);
+    await api('POST', `/api/remote/${tok}/draws/${draw.data.id}/draw`, {}, null);
+    const game = (await api('GET', `/api/remote/${tok}`, undefined, null)).data.card_game;
+    await api('POST', `/api/remote/${tok}/card-games/${game.id}/live`, {}, null);
+    // And an emergency, which must survive
+    const em = await api('POST', `/api/remote/${tok}/emergency`, { level: 'notice', title: 'Survives' }, null);
+
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.ok(manifest.data.draw);
+    assert.ok(manifest.data.card_game);
+
+    const rta = await api('POST', `/api/remote/${tok}/return-to-advertising`, {}, null);
+    assert.strictEqual(rta.status, 200);
+    assert.strictEqual(rta.data.cleared.draws, 1);
+    assert.strictEqual(rta.data.cleared.card_games, 1);
+
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.draw, null);
+    assert.strictEqual(manifest.data.card_game, null);
+    assert.strictEqual(manifest.data.emergency.title, 'Survives'); // untouched
+    await api('POST', `/api/remote/${tok}/emergency/${em.data.id}/clear`, {}, null);
+    await api('DELETE', `/api/draws/${draw.data.id}`);
+  });
+
   await t.test('staff remote can run the game', async () => {
     const remote = await api('POST', `/api/venues/${venueId}/remote-token`);
     const stateRes = await api('GET', `/api/remote/${remote.data.token}`, undefined, null);

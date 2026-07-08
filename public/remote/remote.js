@@ -20,6 +20,7 @@
   let state = null;
   let view = 'home'; // home | cashking | draws | emergency
   let busy = false;
+  let holdRenderUntil = 0; // lets a button show its "done ✓" flash briefly
   const freshNumbers = new Set(); // draw ids whose latest number should pop
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/remote/sw.js');
@@ -74,6 +75,7 @@
 
   function render() {
     if (!state) return;
+    if (Date.now() < holdRenderUntil) return;
     // Don't clobber a form the user is typing into (5s poll re-renders).
     const active = document.activeElement;
     if (active && $('views').contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) return;
@@ -125,6 +127,9 @@
         <span class="emoji">🚨</span>
         <span><span class="t-title">Emergency</span><br><span class="t-sub">${state.emergency ? 'BROADCAST ACTIVE — tap to manage' : 'Take over every screen with an alert'}</span></span>
         <span class="t-go">›</span>
+      </button>
+      <button class="btn-clear" data-return-ads style="margin-top:18px">
+        📺 Return screens to advertising${(game && game.live) || liveDraw ? ' — a game is on screens now' : ''}
       </button>`;
   }
 
@@ -233,7 +238,8 @@
     const ndAdd = e.target.closest('[data-nd-add]');
     const emLevel = e.target.closest('[data-em]');
     const emClear = e.target.closest('[data-em-clear]');
-    if (!spin && !clear && !ckPick && !ckAct && !ckArchive && !ckNew && !ndAdd && !emLevel && !emClear) return;
+    const returnAds = e.target.closest('[data-return-ads]');
+    if (!spin && !clear && !ckPick && !ckAct && !ckArchive && !ckNew && !ndAdd && !emLevel && !emClear && !returnAds) return;
     if (busy) return;
     busy = true;
     try {
@@ -282,6 +288,11 @@
       } else if (emClear) {
         if (!confirm('All clear — end the emergency broadcast?')) { busy = false; return; }
         await api('POST', `/api/remote/${token}/emergency/${state.emergency.id}/clear`);
+      } else if (returnAds) {
+        await api('POST', `/api/remote/${token}/return-to-advertising`);
+        returnAds.textContent = '✓ Screens back to advertising';
+        holdRenderUntil = Date.now() + 1600;
+        setTimeout(() => { holdRenderUntil = 0; render(); }, 1700);
       }
       await load();
     } catch (err) {
