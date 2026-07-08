@@ -398,42 +398,128 @@
 
   // ---- raffle number draw takeover --------------------------------------------------
 
+  // Slot-machine reveal: one blur-spinning reel per digit, reels lock in
+  // left to right with a thump, then the number goes gold under a confetti
+  // burst. Timings: ~1.2s all-spin, 0.55s stagger per lock, 0.85s settle.
   let lastDrawKey = null;
-  let spinTimer = null;
+  let drawTimers = [];
+  let stopConfetti = null;
+
+  function clearDrawAnim() {
+    drawTimers.forEach(clearTimeout);
+    drawTimers = [];
+    if (stopConfetti) { stopConfetti(); stopConfetti = null; }
+  }
 
   function renderDraw() {
     const overlay = $('draw');
     const draw = manifest && manifest.draw;
     if (!draw || draw.number == null) {
       overlay.style.display = 'none';
-      clearInterval(spinTimer);
+      clearDrawAnim();
       lastDrawKey = null;
       return;
     }
     $('draw-name').textContent = draw.name;
-    $('draw-prev').textContent = draw.previous_numbers && draw.previous_numbers.length
-      ? `Already drawn: ${draw.previous_numbers.join('  ·  ')}` : '';
     overlay.style.display = 'flex';
 
     const key = `${draw.id}:${draw.number}:${draw.drawn_at}`;
-    if (key === lastDrawKey) return; // same result, don't re-spin
+    if (key === lastDrawKey) return; // same result, keep the settled board
     lastDrawKey = key;
+    clearDrawAnim();
+    overlay.classList.remove('celebrate');
 
-    // Spin through random numbers in range for ~4s, then reveal the winner.
-    const el = $('draw-number');
-    el.classList.remove('revealed');
-    clearInterval(spinTimer);
-    const span = draw.range_end - draw.range_start + 1;
-    const startedAt = Date.now();
-    spinTimer = setInterval(() => {
-      if (Date.now() - startedAt >= 4000) {
-        clearInterval(spinTimer);
-        el.textContent = draw.number;
-        el.classList.add('revealed');
-        return;
+    const prevEl = $('draw-prev');
+    prevEl.classList.remove('show');
+    prevEl.textContent = draw.previous_numbers && draw.previous_numbers.length
+      ? `Already drawn: ${draw.previous_numbers.join('  ·  ')}` : '';
+
+    const digits = String(draw.number).split('');
+    const reels = $('draw-reels');
+    reels.classList.remove('done');
+    reels.style.fontSize = Math.min(20, 62 / digits.length) + 'vw';
+    const stripHtml = '<div class="strip">'
+      + '01234567890123456789'.split('').map((d) => `<span>${d}</span>`).join('') + '</div>';
+    reels.innerHTML = digits.map(() => `<div class="reel spinning">${stripHtml}</div>`).join('');
+    const reelEls = [...reels.children];
+
+    const SPIN_MS = 1200, STAGGER_MS = 550, SETTLE_MS = 850;
+    digits.forEach((digitChar, i) => {
+      drawTimers.push(setTimeout(() => {
+        const reel = reelEls[i];
+        const strip = reel.firstElementChild;
+        // Freeze the CSS spin where it is, then glide to the target digit
+        // (second copy in the strip, so the reel always rolls downward).
+        strip.style.transform = getComputedStyle(strip).transform;
+        reel.classList.remove('spinning');
+        void strip.offsetHeight; // commit frozen position before transitioning
+        strip.style.transition = `transform ${SETTLE_MS}ms cubic-bezier(.15,.85,.3,1.12)`;
+        strip.style.transform = `translateY(${-(10 + Number(digitChar)) * 1.14}em)`;
+        reel.classList.add('locked');
+
+        if (i === digits.length - 1) {
+          drawTimers.push(setTimeout(() => {
+            reels.classList.add('done');
+            overlay.classList.add('celebrate');
+            prevEl.classList.add('show');
+            stopConfetti = launchConfetti($('draw-confetti'));
+          }, SETTLE_MS));
+        }
+      }, SPIN_MS + i * STAGGER_MS));
+    });
+  }
+
+  function launchConfetti(canvas) {
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    const ctx = canvas.getContext('2d');
+    const COLORS = ['#fbbf24', '#f472b6', '#a78bfa', '#f8fafc', '#34d399', '#60a5fa'];
+    const parts = Array.from({ length: 170 }, (_, i) => {
+      const fromLeft = i % 2 === 0;
+      return {
+        x: fromLeft ? -12 : canvas.width + 12,
+        y: canvas.height * (0.55 + Math.random() * 0.35),
+        vx: (fromLeft ? 1 : -1) * (canvas.width / 220) * (2.5 + Math.random() * 5),
+        vy: -(canvas.height / 110) * (1.6 + Math.random() * 1.8),
+        w: 6 + Math.random() * 9,
+        h: 4 + Math.random() * 6,
+        rot: Math.random() * Math.PI,
+        vr: (Math.random() - 0.5) * 0.35,
+        color: COLORS[i % COLORS.length],
+        life: 0,
+      };
+    });
+    let raf = null;
+    let stopped = false;
+    const gravity = canvas.height / 2600;
+    const step = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let alive = false;
+      for (const p of parts) {
+        p.life++;
+        p.x += p.vx; p.vx *= 0.988;
+        p.y += p.vy; p.vy += gravity;
+        p.rot += p.vr;
+        const alpha = Math.max(0, 1 - p.life / 260);
+        if (alpha <= 0 || p.y > canvas.height + 30) continue;
+        alive = true;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.restore();
       }
-      el.textContent = draw.range_start + Math.floor(Math.random() * span);
-    }, 60);
+      if (alive && !stopped) raf = requestAnimationFrame(step);
+      else ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
+    raf = requestAnimationFrame(step);
+    return () => {
+      stopped = true;
+      if (raf) cancelAnimationFrame(raf);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
   }
 
   // ---- CashKing live board takeover ----------------------------------------------
