@@ -653,11 +653,44 @@ test('CashKing digital card game', async (t) => {
     assert.strictEqual(fresh.status, 201);
   });
 
+  await t.test('console can start/archive games and run emergencies', async () => {
+    const remote = await api('POST', `/api/venues/${venueId}/remote-token`);
+    const tok = remote.data.token;
+
+    // Active game blocks a second one from the console too
+    const blocked = await api('POST', `/api/remote/${tok}/card-games`, { jackpot_start: 1, jackpot_increment: 1 }, null);
+    assert.strictEqual(blocked.status, 409);
+
+    // Emergency from the tablet: venue-scoped, reaches the player, clears
+    const em = await api('POST', `/api/remote/${tok}/emergency`, {
+      level: 'evacuation', title: 'FIRE — EVACUATE', message: 'Use the nearest exit',
+    }, null);
+    assert.strictEqual(em.status, 201);
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.emergency.title, 'FIRE — EVACUATE');
+    let stateRes = await api('GET', `/api/remote/${tok}`, undefined, null);
+    assert.strictEqual(stateRes.data.emergency.venue_scoped, true);
+
+    const cleared = await api('POST', `/api/remote/${tok}/emergency/${em.data.id}/clear`, {}, null);
+    assert.strictEqual(cleared.status, 200);
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.emergency, null);
+
+    // Archive the current game from the console, then start a fresh one
+    stateRes = await api('GET', `/api/remote/${tok}`, undefined, null);
+    await api('POST', `/api/remote/${tok}/card-games/${stateRes.data.card_game.id}/archive`, {}, null);
+    const fresh = await api('POST', `/api/remote/${tok}/card-games`, {
+      name: 'Console Game', jackpot_start: 750, jackpot_increment: 50,
+    }, null);
+    assert.strictEqual(fresh.status, 201);
+    assert.strictEqual(fresh.data.jackpot, 750);
+  });
+
   await t.test('staff remote can run the game', async () => {
     const remote = await api('POST', `/api/venues/${venueId}/remote-token`);
     const stateRes = await api('GET', `/api/remote/${remote.data.token}`, undefined, null);
     const game = stateRes.data.card_game;
-    assert.strictEqual(game.jackpot, 500);
+    assert.strictEqual(game.jackpot, 750); // the game started from the console
     const live = await api('POST', `/api/remote/${remote.data.token}/card-games/${game.id}/live`, {}, null);
     assert.strictEqual(live.status, 200);
     const pick = await api('POST', `/api/remote/${remote.data.token}/card-games/${game.id}/pick`, { index: 7 }, null);

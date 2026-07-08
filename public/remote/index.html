@@ -30,6 +30,7 @@
   .pill.live { background: #052e16; color: var(--live); }
   .pill.ready { background: #3b2a08; color: var(--gold); }
   .pill.cleared { background: #2d2d3a; color: var(--muted); }
+  .pill.danger { background: #450a0a; color: #fca5a5; }
 
   .number { text-align: center; margin: 10px 0 4px; }
   .number .n { font-size: 64px; font-weight: 800; color: var(--gold); line-height: 1.1; font-variant-numeric: tabular-nums; }
@@ -46,6 +47,7 @@
   .btn-draw { background: linear-gradient(135deg, #9333ea, #6b21a8); color: #fff; font-size: 20px; letter-spacing: .06em; }
   .btn-clear { background: var(--panel2); color: var(--text); border: 1px solid var(--line); padding: 12px; font-weight: 600; }
   .btn-new { background: var(--gold); color: #3b2405; }
+  .btn-live { background: linear-gradient(135deg, #15803d, #14532d); color: #fff; font-size: 18px; }
 
   input, select {
     width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--line);
@@ -54,7 +56,23 @@
   .range-row { display: flex; gap: 8px; }
   .range-row label { flex: 1; font-size: 12px; color: var(--muted); }
 
-  #error { display: none; background: #450a0a; color: #fecaca; border-radius: 12px; padding: 12px; margin-top: 14px; text-align: center; }
+  /* Home screen: one big tile per game */
+  .tile {
+    display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 18px 16px; margin-top: 14px; color: var(--text); font-weight: 700;
+  }
+  .tile .emoji { font-size: 34px; }
+  .tile .t-title { font-size: 19px; }
+  .tile .t-sub { font-size: 13px; color: var(--muted); font-weight: 500; margin-top: 2px; }
+  .tile .t-go { margin-left: auto; font-size: 22px; color: var(--muted); }
+  .tile.em { border-color: #7f1d1d; background: linear-gradient(135deg, #2c0b0e, #1c0407); }
+  .tile.em.active { border-color: #ef4444; animation: empulse 1.2s infinite alternate; }
+  .back {
+    background: none; border: none; color: var(--muted); font-weight: 700; font-size: 15px;
+    width: auto; padding: 8px 2px; margin: 6px 0 0; text-align: left;
+  }
+
   .ck-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-top: 10px; }
   .ck-grid button, .ck-grid .rev {
     aspect-ratio: 2/2.6; border-radius: 7px; font-weight: 800; font-size: 13px;
@@ -64,20 +82,29 @@
   .ck-grid .rev { background: #f8fafc; color: #0f172a; opacity: .55; }
   .ck-grid .rev.red { color: #dc2626; }
   .ck-grid .rev.joker { background: linear-gradient(135deg, #fbbf24, #b45309); color: #451a03; opacity: 1; }
-  .btn-live { background: linear-gradient(135deg, #15803d, #14532d); color: #fff; font-size: 18px; }
 
-  /* Tablet layout: wider column, bigger touch targets, full 9-wide card grid.
-     Keep last in the sheet so it outranks the base rules above. */
+  #em-banner {
+    display: none; border-radius: 14px; padding: 16px; margin-top: 14px; text-align: center;
+    font-weight: 800; color: #fff; background: #b91c1c; animation: empulse 1.2s infinite alternate;
+  }
+  @keyframes empulse { from { filter: brightness(1); } to { filter: brightness(1.3); } }
+  .em-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .em-grid button { font-size: 15px; padding: 16px 8px; color: #fff; }
+  .em-evac { background: #b91c1c; } .em-lock { background: #7f1d1d; }
+  .em-alert { background: #b45309; } .em-notice { background: #1d4ed8; }
+
+  #error { display: none; background: #450a0a; color: #fecaca; border-radius: 12px; padding: 12px; margin-top: 14px; text-align: center; }
+  #connecting { text-align: center; padding: 40px 12px; color: var(--muted); }
+
+  /* Tablet layout: wider column, bigger touch targets, full 9-wide card grid */
   @media (min-width: 700px) {
     body { max-width: 860px; font-size: 18px; }
     .ck-grid { grid-template-columns: repeat(9, 1fr); gap: 8px; }
     .ck-grid button, .ck-grid .rev { font-size: 17px; border-radius: 9px; }
     button { padding: 20px; }
     .number .n { font-size: 84px; }
+    .tile .t-title { font-size: 22px; }
   }
-  #connecting { text-align: center; padding: 40px 12px; color: var(--muted); }
-  details { margin-top: 14px; }
-  summary { cursor: pointer; color: var(--muted); font-weight: 600; padding: 6px 2px; }
 </style>
 </head>
 <body>
@@ -89,21 +116,8 @@
 
   <div id="error"></div>
   <div id="connecting">Connecting…<br><span class="muted">Open this app from the link your manager shared.</span></div>
-  <div id="cashking"></div>
-  <div id="draws"></div>
-
-  <details id="new-draw-wrap" style="display:none">
-    <summary>＋ Set up a new draw</summary>
-    <div class="card">
-      <input id="nd-name" placeholder="Draw name — e.g. Friday Meat Raffle">
-      <div class="range-row">
-        <label>First ticket #<input id="nd-start" type="number" inputmode="numeric" value="1"></label>
-        <label>Last ticket #<input id="nd-end" type="number" inputmode="numeric" value="100"></label>
-      </div>
-      <select id="nd-zone"><option value="">Show on: whole venue</option></select>
-      <button class="btn-new" id="nd-add">Create draw</button>
-    </div>
-  </details>
+  <div id="em-banner"></div>
+  <div id="views"></div>
 
 <script src="remote.js"></script>
 </body>

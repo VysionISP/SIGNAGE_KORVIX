@@ -29,15 +29,76 @@ route('GET', '/api/remote/:token', (req, res, params) => {
      LEFT JOIN zones z ON z.id = d.zone_id
      WHERE d.venue_id = ? ORDER BY d.created_at DESC LIMIT 30`, venue.id);
   const game = cashking.currentGame(venue.id);
+  const emergency = db.get(
+    `SELECT * FROM emergencies WHERE active = 1 AND (venue_id IS NULL OR venue_id = ?)
+     ORDER BY created_at DESC LIMIT 1`, venue.id);
   sendJson(res, 200, {
     venue: { id: venue.id, name: venue.name },
     zones: db.all('SELECT id, name FROM zones WHERE venue_id = ? ORDER BY name', venue.id),
     draws: draws.map(drawView),
     card_game: game ? cashking.boardView(game) : null,
+    emergency: emergency ? {
+      id: emergency.id, level: emergency.level, title: emergency.title,
+      message: emergency.message, created_at: emergency.created_at,
+      venue_scoped: emergency.venue_id === venue.id, // global ones clear from the NOC only
+    } : null,
   });
 });
 
+// ---- Emergency broadcast from the venue tablet ---------------------------------
+//
+// Venue-scoped only: the tablet can take over its own venue's screens, never
+// other tenants'. Global (all-venue) broadcasts remain Korvix-only.
+
+const EMERGENCY_LEVELS = new Set(['evacuation', 'lockdown', 'alert', 'notice']);
+
+route('POST', '/api/remote/:token/emergency', async (req, res, params) => {
+  const venue = venueForToken(params.token);
+  const body = await readJson(req);
+  required(body, 'title');
+  const level = EMERGENCY_LEVELS.has(body.level) ? body.level : 'alert';
+  const emergencyId = db.id();
+  db.run('INSERT INTO emergencies (id, venue_id, level, title, message, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
+    emergencyId, venue.id, level, body.title, body.message || '', db.now());
+  db.logEvent('emergency.activated', { venueId: venue.id, detail: `${level}: ${body.title} (staff remote)` });
+  nudgeVenue(venue.id);
+  sendJson(res, 201, { id: emergencyId, level });
+});
+
+route('POST', '/api/remote/:token/emergency/:id/clear', (req, res, params) => {
+  const venue = venueForToken(params.token);
+  const emergency = db.get('SELECT * FROM emergencies WHERE id = ? AND venue_id = ?', params.id, venue.id);
+  if (!emergency) throw new HttpError(404, 'emergency not found (all-venue alerts are cleared by Korvix)');
+  db.run('UPDATE emergencies SET active = 0, cleared_at = ? WHERE id = ?', db.now(), emergency.id);
+  db.logEvent('emergency.cleared', { venueId: venue.id, detail: `${emergency.title} (staff remote)` });
+  nudgeVenue(venue.id);
+  sendJson(res, 200, { ok: true });
+});
+
 // ---- CashKing from the staff phone ------------------------------------------
+
+// Start a new game from the tablet (only when none is running).
+route('POST', '/api/remote/:token/card-games', async (req, res, params) => {
+  const venue = venueForToken(params.token);
+  const body = await readJson(req);
+  const existing = cashking.currentGame(venue.id);
+  if (existing && existing.status === 'active') {
+    throw new HttpError(409, `"${existing.name}" is still running — find the Joker or archive it first`);
+  }
+  const game = cashking.createGame(venue.id, body);
+  db.logEvent('cashking.created', { venueId: venue.id, detail: `${game.name} @ $${game.jackpot_start} (staff remote)` });
+  cashking.fireWebhook(game, venue.name, 'created');
+  nudgeVenue(venue.id);
+  sendJson(res, 201, cashking.boardView(game));
+});
+
+route('POST', '/api/remote/:token/card-games/:id/archive', (req, res, params) => {
+  const { venue, game } = ownedGame(params.token, params.id);
+  db.run("UPDATE card_games SET status = 'archived', live = 0 WHERE id = ?", game.id);
+  db.logEvent('cashking.archived', { venueId: venue.id, detail: `${game.name} (staff remote)` });
+  nudgeVenue(venue.id);
+  sendJson(res, 200, { ok: true });
+});
 
 function ownedGame(token, gameId) {
   const venue = venueForToken(token);
