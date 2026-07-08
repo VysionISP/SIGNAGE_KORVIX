@@ -18,9 +18,10 @@
   const token = localStorage.getItem('korvix.remote_token');
 
   let state = null;
-  let view = 'home'; // home | cashking | draws | emergency
+  let view = 'home'; // home | cashking | draws | wheel | badge | emergency
   let busy = false;
   let holdRenderUntil = 0; // lets a button show its "done ✓" flash briefly
+  const forceCreate = { wheel: false, badge: false }; // show the setup form over an existing game
   const freshNumbers = new Set(); // draw ids whose latest number should pop
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/remote/sw.js');
@@ -82,7 +83,10 @@
 
     $('venue-name').textContent = state.venue.name;
     renderBanner();
-    const views = { home: homeHtml, cashking: cashkingHtml, draws: drawsHtml, emergency: emergencyHtml };
+    const views = {
+      home: homeHtml, cashking: cashkingHtml, draws: drawsHtml,
+      wheel: wheelHtml, badge: badgeHtml, emergency: emergencyHtml,
+    };
     $('views').innerHTML = (views[view] || homeHtml)();
     freshNumbers.clear();
   }
@@ -123,13 +127,27 @@
         <span><span class="t-title">Raffle Draws</span><br><span class="t-sub">${drawSub}</span></span>
         <span class="t-go">›</span>
       </button>
+      <button class="tile" data-nav="wheel">
+        <span class="emoji">🎡</span>
+        <span><span class="t-title">Wheel Spin</span><br><span class="t-sub">${state.wheel
+          ? `${state.wheel.wedges.length} prizes${state.wheel.live ? ' · LIVE ON SCREENS' : ''}${state.wheel.last_spin ? ` · last: ${esc(state.wheel.last_spin.label)}` : ''}`
+          : 'Tap to set up a prize wheel'}</span></span>
+        <span class="t-go">›</span>
+      </button>
+      <button class="tile" data-nav="badge">
+        <span class="emoji">🏅</span>
+        <span><span class="t-title">Badge Draw</span><br><span class="t-sub">${state.badge_draw
+          ? `${moneyAud(state.badge_draw.prize)} pot · ${state.badge_draw.members_count.toLocaleString()} members${state.badge_draw.live ? ' · LIVE' : ''}`
+          : 'Tap to set up the members draw'}</span></span>
+        <span class="t-go">›</span>
+      </button>
       <button class="tile em ${state.emergency ? 'active' : ''}" data-nav="emergency">
         <span class="emoji">🚨</span>
         <span><span class="t-title">Emergency</span><br><span class="t-sub">${state.emergency ? 'BROADCAST ACTIVE — tap to manage' : 'Take over every screen with an alert'}</span></span>
         <span class="t-go">›</span>
       </button>
       <button class="btn-clear" data-return-ads style="margin-top:18px">
-        📺 Return screens to advertising${(game && game.live) || liveDraw ? ' — a game is on screens now' : ''}
+        📺 Return screens to advertising${(game && game.live) || liveDraw || state.wheel?.live || state.badge_draw?.live ? ' — a game is on screens now' : ''}
       </button>`;
   }
 
@@ -205,6 +223,76 @@
       </div>`;
   }
 
+  // ---- Wheel Spin view ------------------------------------------------------------
+
+  function wheelHtml() {
+    const wheel = forceCreate.wheel ? null : state.wheel;
+    if (!wheel) {
+      return `${backBtn}
+      <div class="card">
+        <h2>🎡 Set up the prize wheel</h2>
+        <div class="muted">One prize per line. Add <b>| weight</b> to change the odds — higher = more likely.
+        e.g. <b>Free schnitty | 5</b> vs <b>$100 bar tab | 1</b>.</div>
+        <input id="wh-name" placeholder="Wheel name" value="Wheel Spin">
+        <textarea id="wh-wedges" rows="7" style="width:100%;margin-top:8px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:12px;font:inherit"
+          placeholder="$50 bar tab | 1&#10;Meat tray | 3&#10;Free schnitty | 5&#10;House drink | 5&#10;Spin again | 2"></textarea>
+        <button class="btn-new" data-wh-new>Build wheel</button>
+      </div>`;
+    }
+    return `${backBtn}
+      <div class="card">
+        <h2>🎡 ${esc(wheel.name)} <span class="pill ${wheel.live ? 'live' : 'ready'}">${wheel.live ? 'live' : 'idle'}</span></h2>
+        <div class="muted">${wheel.wedges.map((w) => esc(w.label)).join(' · ')}</div>
+        ${wheel.last_spin ? `<div class="number"><div class="n" style="font-size:34px">🎉 ${esc(wheel.last_spin.label)}</div></div>` : ''}
+        ${wheel.live
+          ? `<button class="btn-draw" data-wh-spin>🎡 SPIN THE WHEEL</button>
+             <button class="btn-clear" data-wh-end>End session — screens back to normal</button>`
+          : '<button class="btn-live" data-wh-live>🔴 GO LIVE on all screens</button>'}
+        <button class="btn-clear" data-wh-newwheel style="opacity:.7">Replace with a new wheel</button>
+      </div>`;
+  }
+
+  // ---- Badge Draw view --------------------------------------------------------------
+
+  function badgeHtml() {
+    const badge = forceCreate.badge ? null : state.badge_draw;
+    if (!badge) {
+      return `${backBtn}
+      <div class="card">
+        <h2>🏅 Set up the members badge draw</h2>
+        <div class="muted">Paste the member list — one per line, number then name (e.g. <b>1234 Karen M.</b>).
+        Claimed = prize resets. Not claimed = pot jackpots by the rise amount.</div>
+        <input id="bd-name" placeholder="Draw name" value="Members Badge Draw">
+        <div class="range-row">
+          <label>Starting prize $<input id="bd-start" type="number" inputmode="numeric" value="100"></label>
+          <label>Rise if unclaimed $<input id="bd-inc" type="number" inputmode="numeric" value="50"></label>
+        </div>
+        <label class="muted" style="font-size:12px">Minutes to claim<input id="bd-mins" type="number" inputmode="numeric" value="3"></label>
+        <textarea id="bd-members" rows="7" style="width:100%;margin-top:8px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:12px;font:inherit"
+          placeholder="1234 Karen M.&#10;2087 Dave T.&#10;3345 Robbo"></textarea>
+        <button class="btn-new" data-bd-new>Create badge draw</button>
+      </div>`;
+    }
+    const current = badge.current;
+    const pending = current && current.outcome === 'pending';
+    return `${backBtn}
+      <div class="card">
+        <h2>🏅 ${esc(badge.name)} <span class="pill ${badge.live ? 'live' : 'ready'}">${badge.live ? 'live' : 'idle'}</span></h2>
+        <div class="muted">${badge.members_count.toLocaleString()} members · ${badge.claim_minutes} min to claim · rises ${moneyAud(badge.increment)} if unclaimed</div>
+        <div class="number"><div class="n">${moneyAud(badge.prize)}</div></div>
+        ${pending ? `
+          <div class="prev" style="font-size:16px;font-weight:700">On screens now: #${esc(current.number)} ${esc(current.name || '')}</div>
+          <button class="btn-live" data-bd-outcome="1">✅ CLAIMED — winner is here!</button>
+          <button class="btn-clear" data-bd-outcome="0">❌ No show — jackpot it</button>` : `
+          ${current ? `<div class="prev">Last: #${esc(current.number)} ${esc(current.name || '')} — ${current.outcome === 'claimed' ? 'claimed 🎉' : 'no show'}</div>` : ''}
+          ${badge.live
+            ? `<button class="btn-draw" data-bd-draw>🏅 DRAW A MEMBER</button>
+               <button class="btn-clear" data-bd-end>End session — screens back to normal</button>`
+            : '<button class="btn-live" data-bd-live>🔴 GO LIVE on all screens</button>'}`}
+        <button class="btn-clear" data-bd-newdraw style="opacity:.7">Replace with a new draw setup</button>
+      </div>`;
+  }
+
   // ---- Emergency view ----------------------------------------------------------------
 
   function emergencyHtml() {
@@ -227,7 +315,11 @@
 
   document.body.addEventListener('click', async (e) => {
     const nav = e.target.closest('[data-nav]');
-    if (nav) { view = nav.dataset.nav; render(); return; }
+    if (nav) { view = nav.dataset.nav; forceCreate.wheel = forceCreate.badge = false; render(); return; }
+    const whNewWheel = e.target.closest('[data-wh-newwheel]');
+    if (whNewWheel) { forceCreate.wheel = true; render(); return; }
+    const bdNewDraw = e.target.closest('[data-bd-newdraw]');
+    if (bdNewDraw) { forceCreate.badge = true; render(); return; }
 
     const spin = e.target.closest('[data-spin]');
     const clear = e.target.closest('[data-clear]');
@@ -239,7 +331,17 @@
     const emLevel = e.target.closest('[data-em]');
     const emClear = e.target.closest('[data-em-clear]');
     const returnAds = e.target.closest('[data-return-ads]');
-    if (!spin && !clear && !ckPick && !ckAct && !ckArchive && !ckNew && !ndAdd && !emLevel && !emClear && !returnAds) return;
+    const whNew = e.target.closest('[data-wh-new]');
+    const whLive = e.target.closest('[data-wh-live]');
+    const whEnd = e.target.closest('[data-wh-end]');
+    const whSpin = e.target.closest('[data-wh-spin]');
+    const bdNew = e.target.closest('[data-bd-new]');
+    const bdLive = e.target.closest('[data-bd-live]');
+    const bdEnd = e.target.closest('[data-bd-end]');
+    const bdDraw = e.target.closest('[data-bd-draw]');
+    const bdOutcome = e.target.closest('[data-bd-outcome]');
+    if (!spin && !clear && !ckPick && !ckAct && !ckArchive && !ckNew && !ndAdd && !emLevel && !emClear && !returnAds
+      && !whNew && !whLive && !whEnd && !whSpin && !bdNew && !bdLive && !bdEnd && !bdDraw && !bdOutcome) return;
     if (busy) return;
     busy = true;
     try {
@@ -293,6 +395,41 @@
         returnAds.textContent = '✓ Screens back to advertising';
         holdRenderUntil = Date.now() + 1600;
         setTimeout(() => { holdRenderUntil = 0; render(); }, 1700);
+      } else if (whNew) {
+        const wedges = $('wh-wedges').value.split('\n').map((line) => {
+          const [label, weight] = line.split('|').map((s) => s.trim());
+          return { label, weight: weight ? parseFloat(weight) : 1 };
+        }).filter((w) => w.label);
+        await api('POST', `/api/remote/${token}/wheels`, { name: $('wh-name').value.trim() || 'Wheel Spin', wedges });
+        forceCreate.wheel = false;
+      } else if (whLive) {
+        await api('POST', `/api/remote/${token}/wheels/${state.wheel.id}/live`);
+      } else if (whEnd) {
+        await api('POST', `/api/remote/${token}/wheels/${state.wheel.id}/end-session`);
+      } else if (whSpin) {
+        if (navigator.vibrate) navigator.vibrate(80);
+        await api('POST', `/api/remote/${token}/wheels/${state.wheel.id}/spin`);
+      } else if (bdNew) {
+        await api('POST', `/api/remote/${token}/badge-draws`, {
+          name: $('bd-name').value.trim() || 'Members Badge Draw',
+          prize_start: parseFloat($('bd-start').value) || 0,
+          increment: parseFloat($('bd-inc').value) || 0,
+          claim_minutes: parseInt($('bd-mins').value, 10) || 3,
+          members_text: $('bd-members').value,
+        });
+        forceCreate.badge = false;
+      } else if (bdLive) {
+        await api('POST', `/api/remote/${token}/badge-draws/${state.badge_draw.id}/live`);
+      } else if (bdEnd) {
+        await api('POST', `/api/remote/${token}/badge-draws/${state.badge_draw.id}/end-session`);
+      } else if (bdDraw) {
+        if (navigator.vibrate) navigator.vibrate(80);
+        await api('POST', `/api/remote/${token}/badge-draws/${state.badge_draw.id}/draw`);
+      } else if (bdOutcome) {
+        const claimed = bdOutcome.dataset.bdOutcome === '1';
+        if (!confirm(claimed ? 'Confirm: winner is here and claims the prize?' : 'Confirm: no show — jackpot the pot?')) { busy = false; return; }
+        if (claimed && navigator.vibrate) navigator.vibrate([100, 60, 100, 60, 300]);
+        await api('POST', `/api/remote/${token}/badge-draws/${state.badge_draw.id}/outcome`, { claimed });
       }
       await load();
     } catch (err) {

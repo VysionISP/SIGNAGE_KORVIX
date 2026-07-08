@@ -713,6 +713,75 @@ test('CashKing digital card game', async (t) => {
     await api('DELETE', `/api/draws/${draw.data.id}`);
   });
 
+  await t.test('wheel spin: weighted pick, live takeover, odds stay hidden', async () => {
+    const tok = (await api('POST', `/api/venues/${venueId}/remote-token`)).data.token;
+
+    const bad = await api('POST', `/api/remote/${tok}/wheels`, { wedges: [{ label: 'only one' }] }, null);
+    assert.strictEqual(bad.status, 400);
+
+    // Weight 0 wedges can never win
+    const wheel = await api('POST', `/api/remote/${tok}/wheels`, {
+      name: 'Test Wheel',
+      wedges: [{ label: 'never', weight: 0 }, { label: 'always', weight: 5 }, { label: 'nope', weight: 0 }],
+    }, null);
+    assert.strictEqual(wheel.status, 201);
+    assert.strictEqual(wheel.data.wedges[0].weight, undefined); // odds not exposed
+
+    await api('POST', `/api/remote/${tok}/wheels/${wheel.data.id}/live`, {}, null);
+    for (let i = 0; i < 5; i++) {
+      const spin = await api('POST', `/api/remote/${tok}/wheels/${wheel.data.id}/spin`, {}, null);
+      assert.strictEqual(spin.data.spin.label, 'always');
+    }
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.wheel.name, 'Test Wheel');
+    assert.strictEqual(manifest.data.wheel.last_spin.label, 'always');
+
+    await api('POST', `/api/remote/${tok}/wheels/${wheel.data.id}/end-session`, {}, null);
+    const after = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(after.data.wheel, null);
+  });
+
+  await t.test('badge draw: claim resets pot, no-show jackpots it', async () => {
+    const tok = (await api('POST', `/api/venues/${venueId}/remote-token`)).data.token;
+    const badge = await api('POST', `/api/remote/${tok}/badge-draws`, {
+      name: 'Friday Badge Draw', prize_start: 200, increment: 75, claim_minutes: 3,
+      members_text: '1234 Karen M.\n2087, Dave T.\n3345 Robbo',
+    }, null);
+    assert.strictEqual(badge.status, 201);
+    assert.strictEqual(badge.data.members_count, 3);
+    assert.strictEqual(badge.data.prize, 200);
+
+    await api('POST', `/api/remote/${tok}/badge-draws/${badge.data.id}/live`, {}, null);
+    let drawn = await api('POST', `/api/remote/${tok}/badge-draws/${badge.data.id}/draw`, {}, null);
+    assert.strictEqual(drawn.data.current.outcome, 'pending');
+    assert.ok(['1234', '2087', '3345'].includes(drawn.data.current.number));
+
+    // Can't draw again while one is pending
+    const dupe = await api('POST', `/api/remote/${tok}/badge-draws/${badge.data.id}/draw`, {}, null);
+    assert.strictEqual(dupe.status, 409);
+
+    // Player sees it with a claim deadline
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.badge_draw.current.outcome, 'pending');
+    assert.ok(Date.parse(manifest.data.badge_draw.current.deadline) > Date.now());
+
+    // No show -> pot jackpots
+    let out = await api('POST', `/api/remote/${tok}/badge-draws/${badge.data.id}/outcome`, { claimed: false }, null);
+    assert.strictEqual(out.data.prize, 275);
+    assert.strictEqual(out.data.history[0].outcome, 'unclaimed');
+
+    // Next draw claimed -> pot resets to the base
+    await api('POST', `/api/remote/${tok}/badge-draws/${badge.data.id}/draw`, {}, null);
+    out = await api('POST', `/api/remote/${tok}/badge-draws/${badge.data.id}/outcome`, { claimed: true }, null);
+    assert.strictEqual(out.data.prize, 200);
+    assert.strictEqual(out.data.history[0].outcome, 'claimed');
+    assert.strictEqual(out.data.history[0].prize, 275); // the amount that was won
+
+    await api('POST', `/api/remote/${tok}/badge-draws/${badge.data.id}/end-session`, {}, null);
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.badge_draw, null);
+  });
+
   await t.test('staff remote can run the game', async () => {
     const remote = await api('POST', `/api/venues/${venueId}/remote-token`);
     const stateRes = await api('GET', `/api/remote/${remote.data.token}`, undefined, null);

@@ -110,6 +110,37 @@
   #ck-won .t2 { font-size: 12vw; font-weight: 900; color: #fde68a; font-variant-numeric: tabular-nums; }
   #ck-won .t3 { font-size: 3vw; opacity: .9; }
 
+  #wheelov {
+    position: absolute; inset: 0; display: none; flex-direction: column; align-items: center;
+    justify-content: center; z-index: 78; text-align: center;
+    background: radial-gradient(ellipse at center, #1e1b4b 0%, #0b0a1f 75%); overflow: hidden;
+  }
+  #wheelov .wh-name { font-size: 3vw; letter-spacing: .25em; font-weight: 800; text-transform: uppercase; margin-bottom: 1.5vh; }
+  #wh-wrap { position: relative; height: 66vh; width: 66vh; }
+  #wh-wrap svg { width: 100%; height: 100%; filter: drop-shadow(0 0 2vh rgba(0,0,0,.6)); }
+  #wh-disc { transform-origin: 50% 50%; }
+  #wh-pointer {
+    position: absolute; top: -2.4vh; left: 50%; transform: translateX(-50%); z-index: 2;
+    width: 0; height: 0; border-left: 2.2vh solid transparent; border-right: 2.2vh solid transparent;
+    border-top: 4.4vh solid #fbbf24; filter: drop-shadow(0 .4vh .6vh rgba(0,0,0,.6));
+  }
+  #wh-result { font-size: 3.4vw; font-weight: 800; min-height: 4.6vw; margin-top: 2vh; }
+  #wh-result .win { color: #fbbf24; text-shadow: 0 0 2vw rgba(251,191,36,.6); animation: reveal .5s ease; }
+  #wh-confetti { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; }
+
+  #badgeov {
+    position: absolute; inset: 0; display: none; flex-direction: column; align-items: center;
+    justify-content: center; z-index: 76; text-align: center; padding: 4vw; box-sizing: border-box;
+    background: radial-gradient(ellipse at center, #713f12 0%, #1c1006 78%); overflow: hidden;
+  }
+  #badgeov .bd-name { font-size: 2.6vw; letter-spacing: .3em; font-weight: 800; text-transform: uppercase; opacity: .9; }
+  #badgeov .bd-prize { font-size: 6.5vw; font-weight: 900; color: #fde68a; font-variant-numeric: tabular-nums; margin: 1vh 0; }
+  #badgeov .bd-member { font-size: 9vw; font-weight: 900; line-height: 1.1; }
+  #badgeov .bd-membername { font-size: 4vw; font-weight: 700; margin-top: .5vh; }
+  #badgeov .bd-count { font-size: 7vw; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 2vh; }
+  #badgeov .bd-sub { font-size: 2.2vw; opacity: .85; margin-top: 1.5vh; }
+  #bd-confetti { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; }
+
   #status {
     position: absolute; right: 1vw; bottom: 1vh; z-index: 50;
     font-size: 12px; opacity: .35; font-variant-numeric: tabular-nums;
@@ -157,6 +188,20 @@
       <div class="t2" id="ck-won-amount"></div>
       <div class="t3" id="ck-won-sub"></div>
     </div>
+  </div>
+
+  <div id="wheelov">
+    <canvas id="wh-confetti"></canvas>
+    <div class="wh-name" id="wh-name"></div>
+    <div id="wh-wrap"><div id="wh-pointer"></div><div id="wh-disc"></div></div>
+    <div id="wh-result"></div>
+  </div>
+
+  <div id="badgeov">
+    <canvas id="bd-confetti"></canvas>
+    <div class="bd-name" id="bd-name"></div>
+    <div class="bd-prize" id="bd-prize"></div>
+    <div id="bd-body"></div>
   </div>
 
   <div id="draw">

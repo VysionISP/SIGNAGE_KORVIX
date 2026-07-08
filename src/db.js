@@ -184,6 +184,37 @@ CREATE TABLE IF NOT EXISTS card_games (
   won_at TEXT
 );
 
+-- Wheel Spin: configurable prize wheel. Wedges carry a label + probability
+-- weight (equal-sized on screen; weight only affects the odds).
+CREATE TABLE IF NOT EXISTS wheels (
+  id TEXT PRIMARY KEY,
+  venue_id TEXT NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT 'Wheel Spin',
+  status TEXT NOT NULL DEFAULT 'active',  -- active | archived
+  live INTEGER NOT NULL DEFAULT 0,
+  wedges TEXT NOT NULL,                   -- JSON [{label, weight}]
+  last_spin TEXT,                         -- JSON {index, label, at}
+  created_at TEXT NOT NULL
+);
+
+-- Members Badge Draw: random member drawn on screen with a claim countdown.
+-- Claimed -> prize resets to the base; unclaimed -> jackpots by the increment.
+CREATE TABLE IF NOT EXISTS badge_draws (
+  id TEXT PRIMARY KEY,
+  venue_id TEXT NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT 'Members Badge Draw',
+  status TEXT NOT NULL DEFAULT 'active',  -- active | archived
+  live INTEGER NOT NULL DEFAULT 0,
+  prize_start REAL NOT NULL DEFAULT 100,
+  increment REAL NOT NULL DEFAULT 50,
+  prize_current REAL NOT NULL DEFAULT 100,
+  claim_minutes INTEGER NOT NULL DEFAULT 3,
+  members TEXT NOT NULL DEFAULT '[]',     -- JSON [{number, name}]
+  current TEXT,                           -- JSON {number, name, drawn_at, deadline, outcome}
+  history TEXT NOT NULL DEFAULT '[]',     -- JSON [{number, name, outcome, prize, at}]
+  created_at TEXT NOT NULL
+);
+
 -- Proof-of-play: one row per content item actually shown on a screen.
 -- Powers reporting for venue promos and the cross-venue advertising network.
 CREATE TABLE IF NOT EXISTS plays (

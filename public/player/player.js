@@ -172,6 +172,8 @@
     renderEmergency();
     renderDraw();
     renderCashKing();
+    renderWheel();
+    renderBadge();
 
     const items = playableItems();
     if (!items.length) {
@@ -632,6 +634,141 @@
         : (game.last_pick ? `Last card: #${game.last_pick.index + 1}` : 'Waiting for tonight’s pick…');
     }
   }
+
+  // ---- Wheel Spin takeover ----------------------------------------------------
+
+  const WHEEL_COLORS = ['#7c3aed', '#db2777', '#f59e0b', '#059669', '#2563eb', '#dc2626', '#0891b2', '#65a30d'];
+  let wheelId = null;
+  let wheelRotation = 0;
+  let lastSpinKey = null;
+  let wheelTimer = null;
+  let stopWheelConfetti = null;
+
+  function wheelSvg(wedges) {
+    const cx = 50, cy = 50, r = 48;
+    const seg = 360 / wedges.length;
+    let parts = '';
+    wedges.forEach((w, i) => {
+      const a0 = (i * seg - 90) * Math.PI / 180;
+      const a1 = ((i + 1) * seg - 90) * Math.PI / 180;
+      const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+      const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+      parts += `<path d="M${cx},${cy} L${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${seg > 180 ? 1 : 0} 1 ${x1.toFixed(2)},${y1.toFixed(2)} Z" fill="${WHEEL_COLORS[i % WHEEL_COLORS.length]}" stroke="#0b0a1f" stroke-width=".7"/>`;
+      const mid = (i + 0.5) * seg - 90;
+      const lx = cx + r * 0.6 * Math.cos(mid * Math.PI / 180);
+      const ly = cy + r * 0.6 * Math.sin(mid * Math.PI / 180);
+      const fontSize = Math.min(4.4, 30 / Math.max(6, w.label.length));
+      parts += `<text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}" font-size="${fontSize}" fill="#fff" font-weight="700" font-family="system-ui,sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${mid.toFixed(1)} ${lx.toFixed(2)} ${ly.toFixed(2)})">${esc(w.label)}</text>`;
+    });
+    return `<svg viewBox="0 0 100 100"><g id="wh-g">${parts}</g><circle cx="50" cy="50" r="7" fill="#0b0a1f" stroke="#fbbf24" stroke-width="1.6"/></svg>`;
+  }
+
+  function renderWheel() {
+    const overlay = $('wheelov');
+    const wheel = manifest && manifest.wheel;
+    if (!wheel) {
+      overlay.style.display = 'none';
+      clearTimeout(wheelTimer);
+      if (stopWheelConfetti) { stopWheelConfetti(); stopWheelConfetti = null; }
+      wheelId = null;
+      lastSpinKey = null;
+      return;
+    }
+    overlay.style.display = 'flex';
+    $('wh-name').textContent = wheel.name;
+
+    const disc = $('wh-disc');
+    if (wheelId !== wheel.id || !disc.firstChild) {
+      wheelId = wheel.id;
+      wheelRotation = 0;
+      lastSpinKey = wheel.last_spin ? `${wheel.last_spin.index}:${wheel.last_spin.at}` : null; // don't replay old spins
+      disc.style.transition = 'none';
+      disc.style.transform = 'rotate(0deg)';
+      disc.innerHTML = wheelSvg(wheel.wedges);
+      $('wh-result').innerHTML = '<span style="opacity:.6">Ready to spin…</span>';
+    }
+
+    const spin = wheel.last_spin;
+    const key = spin ? `${spin.index}:${spin.at}` : null;
+    if (!spin || key === lastSpinKey) return;
+    lastSpinKey = key;
+
+    // Roll 4 extra turns, land the winning wedge centre under the pointer.
+    const seg = 360 / wheel.wedges.length;
+    const targetMod = (360 - ((spin.index + 0.5) * seg)) % 360;
+    const delta = ((targetMod - (wheelRotation % 360)) % 360 + 360) % 360 + 4 * 360;
+    wheelRotation += delta;
+    $('wh-result').innerHTML = '<span style="opacity:.7">Spinning…</span>';
+    disc.style.transition = 'transform 5s cubic-bezier(.12,.65,.15,1)';
+    disc.style.transform = `rotate(${wheelRotation}deg)`;
+    clearTimeout(wheelTimer);
+    wheelTimer = setTimeout(() => {
+      $('wh-result').innerHTML = `<span class="win">🎉 ${esc(spin.label)}</span>`;
+      if (stopWheelConfetti) stopWheelConfetti();
+      stopWheelConfetti = launchConfetti($('wh-confetti'));
+    }, 5100);
+  }
+
+  // ---- Members Badge Draw takeover -----------------------------------------------
+
+  let lastBadgeKey = null;
+  let stopBadgeConfetti = null;
+
+  function renderBadge() {
+    const overlay = $('badgeov');
+    const badge = manifest && manifest.badge_draw;
+    if (!badge) {
+      overlay.style.display = 'none';
+      if (stopBadgeConfetti) { stopBadgeConfetti(); stopBadgeConfetti = null; }
+      lastBadgeKey = null;
+      return;
+    }
+    overlay.style.display = 'flex';
+    $('bd-name').textContent = badge.name;
+    $('bd-prize').textContent = moneyAud(badge.prize);
+
+    const current = badge.current;
+    const body = $('bd-body');
+    if (!current) {
+      body.innerHTML = '<div class="bd-sub" style="font-size:3vw">Tonight someone here wins it — are you in the room?</div>';
+      return;
+    }
+    const key = `${current.number}:${current.drawn_at}:${current.outcome}`;
+    if (key === lastBadgeKey) return;
+    lastBadgeKey = key;
+
+    if (current.outcome === 'pending') {
+      body.innerHTML = `
+        <div class="bd-member">#${esc(current.number)}</div>
+        <div class="bd-membername">${esc(current.name || '')}</div>
+        <div class="bd-count" data-count-to="${esc(current.deadline)}">--:--</div>
+        <div class="bd-sub">Present your membership card at the bar before time runs out!</div>`;
+    } else if (current.outcome === 'claimed') {
+      $('bd-prize').textContent = moneyAud(current.prize ?? badge.prize);
+      body.innerHTML = `
+        <div class="bd-member" style="color:#fde68a">WINNER!</div>
+        <div class="bd-membername">#${esc(current.number)} ${esc(current.name || '')}</div>
+        <div class="bd-sub" style="font-size:2.8vw">Congratulations — collected in person! 🎉</div>`;
+      if (stopBadgeConfetti) stopBadgeConfetti();
+      stopBadgeConfetti = launchConfetti($('bd-confetti'));
+    } else {
+      body.innerHTML = `
+        <div class="bd-member" style="opacity:.55">#${esc(current.number)}</div>
+        <div class="bd-membername" style="opacity:.55">${esc(current.name || '')} wasn't here…</div>
+        <div class="bd-sub" style="font-size:3vw;color:#fde68a;font-weight:800">JACKPOTS to ${moneyAud(badge.prize)} next draw!</div>`;
+    }
+  }
+
+  // Claim-countdown ticker (mm:ss, red under 30s, TIME'S UP past deadline).
+  setInterval(() => {
+    document.querySelectorAll('[data-count-to]').forEach((el) => {
+      const ms = Date.parse(el.dataset.countTo) - Date.now();
+      if (ms <= 0) { el.textContent = "TIME'S UP"; el.style.color = '#f87171'; return; }
+      const total = Math.ceil(ms / 1000);
+      el.textContent = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+      el.style.color = ms < 30000 ? '#f87171' : '';
+    });
+  }, 500);
 
   // ---- emergency takeover -------------------------------------------------------
 

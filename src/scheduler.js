@@ -9,6 +9,7 @@
 
 const db = require('./db');
 const cashking = require('./cardgame');
+const games = require('./games');
 
 // Venue-local weekday (0=Sun..6=Sat) and minutes since midnight.
 function venueClock(timezone, date = new Date()) {
@@ -189,6 +190,8 @@ function buildManifest(screen) {
     // Live board takes over every venue screen; the promo view feeds the
     // 'cashking' playlist widget between game nights.
     card_game: game && game.live ? cashking.boardView(game) : null,
+    wheel: (() => { const w = games.currentWheel(screen.venue_id); return w && w.live ? games.wheelView(w) : null; })(),
+    badge_draw: (() => { const b = games.currentBadge(screen.venue_id); return b && b.live ? games.badgeView(b) : null; })(),
     card_game_promo: game ? cashking.promoView(game, venue.name) : null,
     draw: draw && (() => {
       let numbers = [];

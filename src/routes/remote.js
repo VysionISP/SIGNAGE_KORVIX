@@ -11,6 +11,7 @@ const { sendJson, readJson, HttpError, required } = require('../util');
 const { nudgeVenue } = require('./admin');
 const { spinDraw, drawView } = require('../draws');
 const cashking = require('../cardgame');
+const games = require('../games');
 
 const routes = [];
 function route(method, pattern, handler) { routes.push({ method, pattern, handler }); }
@@ -37,6 +38,8 @@ route('GET', '/api/remote/:token', (req, res, params) => {
     zones: db.all('SELECT id, name FROM zones WHERE venue_id = ? ORDER BY name', venue.id),
     draws: draws.map(drawView),
     card_game: game ? cashking.boardView(game) : null,
+    wheel: (() => { const w = games.currentWheel(venue.id); return w ? games.wheelView(w) : null; })(),
+    badge_draw: (() => { const b = games.currentBadge(venue.id); return b ? games.badgeView(b) : null; })(),
     emergency: emergency ? {
       id: emergency.id, level: emergency.level, title: emergency.title,
       message: emergency.message, created_at: emergency.created_at,
@@ -51,12 +54,114 @@ route('GET', '/api/remote/:token', (req, res, params) => {
 route('POST', '/api/remote/:token/return-to-advertising', (req, res, params) => {
   const venue = venueForToken(params.token);
   const draws = db.run("UPDATE draws SET status = 'cleared' WHERE venue_id = ? AND status = 'live'", venue.id).changes;
-  const games = db.run('UPDATE card_games SET live = 0 WHERE venue_id = ? AND live = 1', venue.id).changes;
-  if (draws || games) {
+  const cardGames = db.run('UPDATE card_games SET live = 0 WHERE venue_id = ? AND live = 1', venue.id).changes;
+  const wheels = db.run('UPDATE wheels SET live = 0 WHERE venue_id = ? AND live = 1', venue.id).changes;
+  const badges = db.run('UPDATE badge_draws SET live = 0 WHERE venue_id = ? AND live = 1', venue.id).changes;
+  if (draws || cardGames || wheels || badges) {
     db.logEvent('screens.returned', { venueId: venue.id, detail: `back to advertising (staff remote)` });
     nudgeVenue(venue.id);
   }
-  sendJson(res, 200, { ok: true, cleared: { draws, card_games: games } });
+  sendJson(res, 200, { ok: true, cleared: { draws, card_games: cardGames, wheels, badge_draws: badges } });
+});
+
+// ---- Wheel Spin from the tablet -------------------------------------------------
+
+function ownedWheel(token, wheelId) {
+  const venue = venueForToken(token);
+  const wheel = db.get('SELECT * FROM wheels WHERE id = ? AND venue_id = ?', wheelId, venue.id);
+  if (!wheel) throw new HttpError(404, 'wheel not found');
+  return { venue, wheel };
+}
+
+route('POST', '/api/remote/:token/wheels', async (req, res, params) => {
+  const venue = venueForToken(params.token);
+  const body = await readJson(req);
+  const existing = games.currentWheel(venue.id);
+  if (existing) db.run("UPDATE wheels SET status = 'archived', live = 0 WHERE id = ?", existing.id);
+  const wheel = games.createWheel(venue.id, body);
+  db.logEvent('wheel.created', { venueId: venue.id, detail: `${wheel.name} (staff remote)` });
+  nudgeVenue(venue.id);
+  sendJson(res, 201, games.wheelView(wheel));
+});
+
+route('POST', '/api/remote/:token/wheels/:id/live', (req, res, params) => {
+  const { venue, wheel } = ownedWheel(params.token, params.id);
+  if (wheel.status === 'archived') throw new HttpError(409, 'wheel is archived');
+  db.run('UPDATE wheels SET live = 1 WHERE id = ?', wheel.id);
+  nudgeVenue(venue.id);
+  sendJson(res, 200, games.wheelView(db.get('SELECT * FROM wheels WHERE id = ?', wheel.id)));
+});
+
+route('POST', '/api/remote/:token/wheels/:id/end-session', (req, res, params) => {
+  const { venue, wheel } = ownedWheel(params.token, params.id);
+  db.run('UPDATE wheels SET live = 0 WHERE id = ?', wheel.id);
+  nudgeVenue(venue.id);
+  sendJson(res, 200, { ok: true });
+});
+
+route('POST', '/api/remote/:token/wheels/:id/spin', (req, res, params) => {
+  const { venue, wheel } = ownedWheel(params.token, params.id);
+  const spin = games.spinWheel(wheel);
+  db.logEvent('wheel.spun', { venueId: venue.id, detail: `${wheel.name}: ${spin.label}` });
+  nudgeVenue(venue.id);
+  sendJson(res, 200, { ...games.wheelView(db.get('SELECT * FROM wheels WHERE id = ?', wheel.id)), spin });
+});
+
+// ---- Members Badge Draw from the tablet -------------------------------------------
+
+function ownedBadge(token, badgeId) {
+  const venue = venueForToken(token);
+  const badge = db.get('SELECT * FROM badge_draws WHERE id = ? AND venue_id = ?', badgeId, venue.id);
+  if (!badge) throw new HttpError(404, 'badge draw not found');
+  return { venue, badge };
+}
+
+route('POST', '/api/remote/:token/badge-draws', async (req, res, params) => {
+  const venue = venueForToken(params.token);
+  const body = await readJson(req);
+  const existing = games.currentBadge(venue.id);
+  if (existing) db.run("UPDATE badge_draws SET status = 'archived', live = 0 WHERE id = ?", existing.id);
+  const badge = games.createBadgeDraw(venue.id, body);
+  db.logEvent('badge.created', { venueId: venue.id, detail: `${badge.name} (staff remote)` });
+  nudgeVenue(venue.id);
+  sendJson(res, 201, games.badgeView(badge));
+});
+
+route('POST', '/api/remote/:token/badge-draws/:id/live', (req, res, params) => {
+  const { venue, badge } = ownedBadge(params.token, params.id);
+  if (badge.status === 'archived') throw new HttpError(409, 'badge draw is archived');
+  db.run('UPDATE badge_draws SET live = 1 WHERE id = ?', badge.id);
+  nudgeVenue(venue.id);
+  sendJson(res, 200, games.badgeView(db.get('SELECT * FROM badge_draws WHERE id = ?', badge.id)));
+});
+
+route('POST', '/api/remote/:token/badge-draws/:id/end-session', (req, res, params) => {
+  const { venue, badge } = ownedBadge(params.token, params.id);
+  db.run('UPDATE badge_draws SET live = 0 WHERE id = ?', badge.id);
+  nudgeVenue(venue.id);
+  sendJson(res, 200, { ok: true });
+});
+
+route('POST', '/api/remote/:token/badge-draws/:id/draw', (req, res, params) => {
+  const { venue, badge } = ownedBadge(params.token, params.id);
+  const drawn = games.drawMember(badge);
+  db.logEvent('badge.drawn', { venueId: venue.id, detail: `${badge.name}: #${drawn.number} ${drawn.name}` });
+  nudgeVenue(venue.id);
+  sendJson(res, 200, games.badgeView(db.get('SELECT * FROM badge_draws WHERE id = ?', badge.id)));
+});
+
+route('POST', '/api/remote/:token/badge-draws/:id/outcome', async (req, res, params) => {
+  const { venue, badge } = ownedBadge(params.token, params.id);
+  const body = await readJson(req);
+  const updated = games.resolveBadge(badge, !!body.claimed);
+  db.logEvent(body.claimed ? 'badge.claimed' : 'badge.unclaimed', {
+    venueId: venue.id,
+    detail: body.claimed
+      ? `$${badge.prize_current} claimed`
+      : `unclaimed — jackpots to $${updated.prize_current}`,
+  });
+  nudgeVenue(venue.id);
+  sendJson(res, 200, games.badgeView(updated));
 });
 
 // ---- Emergency broadcast from the venue tablet ---------------------------------

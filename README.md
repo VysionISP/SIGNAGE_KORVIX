@@ -126,6 +126,16 @@ npm test           # end-to-end smoke tests (boots a real server)
   marketing webhook fires a ready-to-post blurb on every event (new game,
   go-live, jackpot roll-up, win) — point it at Zapier/Make to hit socials
   and email automatically.
+- **Wheel Spin.** A configurable prize wheel (2–24 wedges, e.g. "$50 bar
+  tab", "Meat tray", "Spin again") that takes over every screen: staff tap
+  SPIN on the console, the wheel rolls for five seconds and lands with
+  confetti. Wedges carry hidden probability weights — the wheel draws them
+  equal-sized, but rare prizes can be made rare.
+- **Members Badge Draw.** The classic club promo: paste the member list,
+  set a starting prize, a rise-if-unclaimed amount and claim minutes. DRAW
+  puts a random member's number and name on every screen with a live claim
+  countdown; CLAIMED resets the pot with a winner celebration, no-show
+  jackpots it for next week.
 - **Games console (`/games/<token>`).** Games are run exclusively from an
   installable PWA on the venue's tablet or a staff phone — the dashboard is
   for setup and monitoring only. From Dashboard → Draws, generate the
@@ -214,6 +224,10 @@ POST /api/remote/:token/draws             create a draw from the console
 POST /api/remote/:token/draws/:id/draw    spin a draw
 POST /api/remote/:token/draws/:id/clear   clear draw from screens
 POST /api/remote/:token/card-games/:id/live|pick|end-session   run CashKing
+POST /api/remote/:token/wheels            create prize wheel; /:id/live|spin|end-session
+POST /api/remote/:token/badge-draws       create members draw; /:id/live|draw|outcome|end-session
+POST /api/remote/:token/emergency         venue-scoped broadcast; /:id/clear
+POST /api/remote/:token/return-to-advertising   end all game takeovers in one tap
 GET  /games/:token                        clean URL to set on the venue tablet
 
 # Player protocol
