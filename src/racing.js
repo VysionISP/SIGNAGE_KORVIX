@@ -1,65 +1,165 @@
 'use strict';
 
-// Racing feed poller. Venues with a racing_jurisdiction set get a 'racing'
-// feed refreshed from the TAB next-to-go public API every ~45s: the next
-// races in order, plus best-effort results captured as races jump (max a
-// couple of detail calls per cycle, so we stay polite). Screens on the
-// racing channels render this feed with a live countdown.
+// Racing feed poller with automatic source failover.
 //
-// Venues with a licensed data supplier can instead push to the generic
-// webhook (POST /api/integrations/:venueId/racing) with the same shape:
+// Venues with a racing_jurisdiction set get a 'racing' feed refreshed every
+// ~45s. Sources, tried in order until one works (the winner is remembered
+// and retried first next cycle):
+//   1. TAB info-service next-to-go   — blocked from some datacenter IPs
+//   2. Ladbrokes public racing API   — same national next-to-go data
+// Force one with KORVIX_RACING_SOURCE=tab|ladbrokes (default: auto).
+//
+// Results are chased best-effort after races jump (a couple of polite detail
+// calls per cycle). Venues with a licensed supplier can bypass all of this by
+// pushing to POST /api/integrations/:venueId/racing with the same shape:
 //   { races: [{meeting, number, name, type, start, distance, location}],
 //     results: [{meeting, number, placings: ["1st #4 Name", ...]}] }
 
 const db = require('./db');
 
-const NTG_URL = (jurisdiction) =>
-  `https://api.beta.tab.com.au/v1/tab-info-service/racing/next-to-go/races?jurisdiction=${jurisdiction}&maxRaces=12`;
-const DETAIL_URL = (jurisdiction, r) =>
-  `https://api.beta.tab.com.au/v1/tab-info-service/racing/dates/${r.date}/meetings/${r.type}/${r.mnemonic}/races/${r.number}?jurisdiction=${jurisdiction}`;
+const SOURCE_MODE = (process.env.KORVIX_RACING_SOURCE || 'auto').toLowerCase();
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
 const MAX_DETAIL_CALLS = 2;   // per jurisdiction per cycle
 const RESULTS_KEPT = 8;
 
+let preferredSource = null;   // last source that worked
+
 // Races we saw jump, per jurisdiction, still awaiting a result.
 const pendingResults = new Map(); // jurisdiction -> Map(key -> race)
 
-const raceKey = (r) => `${r.date}:${r.mnemonic}:${r.number}`;
-
 async function fetchJson(url) {
   const res = await fetch(url, {
-    headers: { accept: 'application/json' },
+    headers: { accept: 'application/json', 'user-agent': UA },
     signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) throw new Error(`racing api ${res.status}`);
   return res.json();
 }
 
-function normalizeNtg(data) {
+// ---- source: TAB info-service ------------------------------------------------
+
+function normalizeTab(data) {
   return (data.races || []).map((race) => ({
     meeting: race.meeting?.meetingName || '',
     location: race.meeting?.location || '',
     type: race.meeting?.raceType || 'R',      // R gallops | H harness | G greyhounds
-    mnemonic: race.meeting?.venueMnemonic || '',
-    date: race.meeting?.meetingDate || '',
     number: race.raceNumber,
     name: race.raceName || '',
     distance: race.raceDistance || null,
     start: race.raceStartTime,                 // ISO — players count down client-side
+    source: 'tab',
+    detail: {
+      date: race.meeting?.meetingDate || '',
+      mnemonic: race.meeting?.venueMnemonic || '',
+      type: race.meeting?.raceType || 'R',
+    },
   })).filter((r) => r.meeting && r.start);
 }
 
-function extractPlacings(detail) {
-  // detail.results: array of runner-number arrays by placing; runners: names.
+async function fetchTab(jurisdiction) {
+  const data = await fetchJson(
+    `https://api.beta.tab.com.au/v1/tab-info-service/racing/next-to-go/races?jurisdiction=${jurisdiction}&maxRaces=12`);
+  return normalizeTab(data);
+}
+
+function tabPlacings(detail) {
   if (!Array.isArray(detail.results) || !detail.results.length) return null;
   const names = new Map((detail.runners || []).map((run) => [run.runnerNumber, run.runnerName]));
-  const ordinal = ['1st', '2nd', '3rd', '4th'];
+  const ordinal = ['1st', '2nd', '3rd'];
   return detail.results.slice(0, 3).map((group, i) =>
     `${ordinal[i]} ${[].concat(group).map((n) => `#${n} ${names.get(n) || ''}`.trim()).join(' / ')}`);
 }
 
+async function fetchTabResult(jurisdiction, race) {
+  const d = race.detail || {};
+  const data = await fetchJson(
+    `https://api.beta.tab.com.au/v1/tab-info-service/racing/dates/${d.date}/meetings/${d.type}/${d.mnemonic}/races/${race.number}?jurisdiction=${jurisdiction}`);
+  return tabPlacings(data);
+}
+
+// ---- source: Ladbrokes public API ---------------------------------------------
+
+const LB_CATEGORY = {
+  '4a2788f8-e825-4d36-9894-efd4baf1cfae': 'R', // thoroughbred
+  '161d9be2-e909-4326-8c2c-35ed71fb460b': 'H', // harness
+  '9daef0d7-bf3c-4f50-921d-8e818c60fe61': 'G', // greyhounds
+};
+
+function normalizeLadbrokes(data) {
+  const d = data.data || {};
+  const summaries = d.race_summaries || {};
+  const order = Array.isArray(d.next_to_go_ids) && d.next_to_go_ids.length
+    ? d.next_to_go_ids : Object.keys(summaries);
+  return order.map((id) => summaries[id]).filter(Boolean)
+    .filter((r) => !r.venue_country || r.venue_country === 'AUS' || r.venue_country === 'NZL')
+    .map((r) => {
+      const dist = r.race_form?.distance;
+      const seconds = r.advertised_start?.seconds ?? r.advertised_start;
+      return {
+        meeting: r.meeting_name || r.venue_name || '',
+        location: r.venue_state || r.venue_country || '',
+        type: LB_CATEGORY[r.category_id] || 'R',
+        number: r.race_number,
+        name: r.race_name || '',
+        distance: (dist && typeof dist === 'object' ? dist.distance : dist) || null,
+        start: Number(seconds) ? new Date(Number(seconds) * 1000).toISOString() : null,
+        source: 'ladbrokes',
+        detail: { race_id: r.race_id || r.id || null },
+      };
+    }).filter((r) => r.meeting && r.start);
+}
+
+async function fetchLadbrokes() {
+  const data = await fetchJson('https://api.ladbrokes.com.au/rest/v1/racing/?method=nextraces&count=15');
+  return normalizeLadbrokes(data);
+}
+
+// Results shape on this API varies; extract defensively and give up quietly.
+function ladbrokesPlacings(data) {
+  const results = data?.data?.results || data?.results;
+  if (!Array.isArray(results) || !results.length) return null;
+  const ordinal = { 1: '1st', 2: '2nd', 3: '3rd' };
+  const top = results
+    .filter((r) => Number(r.position || r.place) >= 1 && Number(r.position || r.place) <= 3)
+    .sort((a, b) => Number(a.position || a.place) - Number(b.position || b.place))
+    .map((r) => `${ordinal[Number(r.position || r.place)]} #${r.runner_number ?? r.number ?? '?'} ${r.name || r.runner_name || ''}`.trim());
+  return top.length ? top : null;
+}
+
+async function fetchLadbrokesResult(race) {
+  if (!race.detail?.race_id) return null;
+  const data = await fetchJson(
+    `https://api.ladbrokes.com.au/rest/v1/racing/?method=racecard&id=${race.detail.race_id}`);
+  return ladbrokesPlacings(data);
+}
+
+// ---- polling --------------------------------------------------------------------
+
+const raceKey = (r) => r.detail?.race_id || `${r.detail?.date}:${r.detail?.mnemonic}:${r.number}`;
+
+async function fetchRaces(jurisdiction) {
+  const order = SOURCE_MODE === 'tab' ? ['tab']
+    : SOURCE_MODE === 'ladbrokes' ? ['ladbrokes']
+      : preferredSource === 'ladbrokes' ? ['ladbrokes', 'tab'] : ['tab', 'ladbrokes'];
+  let lastErr = null;
+  for (const source of order) {
+    try {
+      const races = source === 'tab' ? await fetchTab(jurisdiction) : await fetchLadbrokes();
+      if (races.length) {
+        if (preferredSource !== source) console.log(`[korvix] racing feed using ${source} (${jurisdiction})`);
+        preferredSource = source;
+        return { races, source };
+      }
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('no racing source returned races');
+}
+
 async function pollJurisdiction(jurisdiction, previousPayload) {
-  const races = normalizeNtg(await fetchJson(NTG_URL(jurisdiction)));
+  const { races, source } = await fetchRaces(jurisdiction);
 
   // Track races that have jumped so we can chase their results.
   let pending = pendingResults.get(jurisdiction);
@@ -78,7 +178,9 @@ async function pollJurisdiction(jurisdiction, previousPayload) {
     if (detailCalls >= MAX_DETAIL_CALLS) break;
     detailCalls++;
     try {
-      const placings = extractPlacings(await fetchJson(DETAIL_URL(jurisdiction, race)));
+      const placings = race.source === 'tab'
+        ? await fetchTabResult(jurisdiction, race)
+        : await fetchLadbrokesResult(race);
       if (placings) {
         pending.delete(key);
         results.unshift({
@@ -91,7 +193,8 @@ async function pollJurisdiction(jurisdiction, previousPayload) {
 
   return {
     jurisdiction,
-    races: races.slice(0, 8),
+    source,
+    races: races.slice(0, 8).map(({ detail, ...race }) => race), // keep internals out of the feed
     results: results.slice(0, RESULTS_KEPT),
   };
 }
@@ -138,4 +241,4 @@ function start() {
   setTimeout(() => { pollOnce().catch(() => {}); }, 3000).unref();
 }
 
-module.exports = { start, pollOnce };
+module.exports = { start, pollOnce, normalizeTab, normalizeLadbrokes, ladbrokesPlacings };

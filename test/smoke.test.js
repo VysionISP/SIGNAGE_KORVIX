@@ -666,6 +666,57 @@ test('CashKing digital card game', async (t) => {
   });
 });
 
+test('racing source normalizers', () => {
+  const { normalizeTab, normalizeLadbrokes, ladbrokesPlacings } = require('../src/racing');
+
+  const tab = normalizeTab({
+    races: [{
+      meeting: { meetingName: 'Randwick', location: 'NSW', raceType: 'R', venueMnemonic: 'RAN', meetingDate: '2026-07-08' },
+      raceNumber: 6, raceName: 'City Tattersalls Hcp', raceDistance: 1400,
+      raceStartTime: '2026-07-08T05:30:00.000Z',
+    }, {
+      meeting: null, raceNumber: 1, raceStartTime: '2026-07-08T05:40:00.000Z', // junk -> dropped
+    }],
+  });
+  assert.strictEqual(tab.length, 1);
+  assert.strictEqual(tab[0].meeting, 'Randwick');
+  assert.strictEqual(tab[0].type, 'R');
+  assert.strictEqual(tab[0].source, 'tab');
+
+  const lb = normalizeLadbrokes({
+    data: {
+      next_to_go_ids: ['b', 'a'],
+      race_summaries: {
+        a: {
+          race_id: 'a', meeting_name: 'Menangle', venue_state: 'NSW', venue_country: 'AUS',
+          category_id: '161d9be2-e909-4326-8c2c-35ed71fb460b', race_number: 3,
+          race_name: 'Pace 2300m', race_form: { distance: { distance: 2300 } },
+          advertised_start: { seconds: 1780000000 },
+        },
+        b: {
+          race_id: 'b', meeting_name: 'Ascot', venue_country: 'GBR', // overseas -> dropped
+          category_id: '4a2788f8-e825-4d36-9894-efd4baf1cfae', race_number: 2,
+          advertised_start: { seconds: 1780000100 },
+        },
+      },
+    },
+  });
+  assert.strictEqual(lb.length, 1);
+  assert.strictEqual(lb[0].meeting, 'Menangle');
+  assert.strictEqual(lb[0].type, 'H');
+  assert.strictEqual(lb[0].distance, 2300);
+  assert.strictEqual(lb[0].start, new Date(1780000000 * 1000).toISOString());
+  assert.strictEqual(lb[0].source, 'ladbrokes');
+
+  assert.deepStrictEqual(ladbrokesPlacings({
+    data: { results: [
+      { position: 2, runner_number: 5, name: 'Midnight Ale' },
+      { position: 1, runner_number: 7, name: 'Coastal Runner' },
+    ] },
+  }), ['1st #7 Coastal Runner', '2nd #5 Midnight Ale']);
+  assert.strictEqual(ladbrokesPlacings({ data: {} }), null);
+});
+
 test('scheduler time-window helpers', () => {
   const { inWindow, matchDay } = require('../src/scheduler');
   // plain window
