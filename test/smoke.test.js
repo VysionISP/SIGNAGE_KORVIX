@@ -406,6 +406,46 @@ test('full venue lifecycle', async (t) => {
     await api('PATCH', `/api/media/${mediaId}`, { fit: 'cover' });
   });
 
+  await t.test('screen channels: racing/sports screens override schedules', async () => {
+    const bad = await api('PATCH', `/api/screens/${screenId}`, { channel: 'bogus' });
+    assert.strictEqual(bad.status, 400);
+
+    await api('PATCH', `/api/screens/${screenId}`, { channel: 'racing1' });
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.screen.channel, 'racing1');
+    assert.strictEqual(manifest.data.playlist.items.length, 1);
+    assert.strictEqual(manifest.data.playlist.items[0].src, 'racing:1');
+    assert.strictEqual(manifest.data.schedule, null);
+
+    await api('PATCH', `/api/screens/${screenId}`, { channel: 'racing-results' });
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.playlist.items[0].src, 'racing:results');
+
+    // Racing feed arrives via the webhook (or the built-in TAB poller)
+    const feed = await api('POST', `/api/integrations/${venueId}/racing`, {
+      jurisdiction: 'NSW',
+      races: [{ meeting: 'Randwick', number: 6, type: 'R', name: 'Hcp', start: new Date(Date.now() + 300000).toISOString() }],
+      results: [{ meeting: 'Rosehill', number: 4, type: 'R', placings: ['1st #7 Coastal Runner'] }],
+    });
+    assert.strictEqual(feed.status, 200);
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.feeds.racing.races[0].meeting, 'Randwick');
+    assert.strictEqual(manifest.data.feeds.racing.results[0].placings[0], '1st #7 Coastal Runner');
+
+    // Back to main -> scheduled playlist returns
+    await api('PATCH', `/api/screens/${screenId}`, { channel: 'main' });
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.notStrictEqual(manifest.data.playlist.id, 'channel:main');
+    assert.ok(manifest.data.playlist.items[0].media_id);
+  });
+
+  await t.test('venue racing jurisdiction persists', async () => {
+    const patched = await api('PATCH', `/api/venues/${venueId}`, { racing_jurisdiction: 'nsw' });
+    assert.strictEqual(patched.data.racing_jurisdiction, 'NSW');
+    const off = await api('PATCH', `/api/venues/${venueId}`, { racing_jurisdiction: null });
+    assert.strictEqual(off.data.racing_jurisdiction, null);
+  });
+
   await t.test('unpair returns player to pending', async () => {
     await api('POST', `/api/screens/${screenId}/unpair`);
     const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);

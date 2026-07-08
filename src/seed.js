@@ -19,7 +19,7 @@ function seedDemo() {
   db.run('INSERT INTO venues (id, org_id, name, timezone, address, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     venueId, orgId, 'The Korvix Tavern', 'Australia/Sydney', '42 Demo Street, Sydney NSW', -33.8688, 151.2093, now);
 
-  const zoneNames = ['Entrance', 'Main Bar', 'Bistro', 'Gaming Room', 'Sports Bar', 'Function Room'];
+  const zoneNames = ['Entrance', 'Main Bar', 'Bistro', 'Gaming Room', 'Sports Bar', 'Function Room', 'TAB'];
   const zones = {};
   for (const name of zoneNames) {
     const zoneId = db.id();
@@ -39,6 +39,16 @@ function seedDemo() {
   for (const [name, zone, orientation] of screens) {
     db.run('INSERT INTO screens (id, venue_id, zone_id, name, orientation, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       db.id(), venueId, zones[zone], name, orientation, now);
+  }
+
+  // TAB corner: dedicated racing channel screens (next 3 races + results).
+  const tabScreens = [
+    ['TAB Next To Go', 'racing1'], ['TAB 2nd Race', 'racing2'],
+    ['TAB 3rd Race', 'racing3'], ['TAB Results', 'racing-results'],
+  ];
+  for (const [name, channel] of tabScreens) {
+    db.run('INSERT INTO screens (id, venue_id, zone_id, name, orientation, channel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      db.id(), venueId, zones.TAB, name, 'landscape', channel, now);
   }
 
   function media(name, type, { src = '', content = '', duration = 10 } = {}) {
@@ -179,6 +189,22 @@ function seedDemo() {
   });
   feed('membership', {
     birthdays: [{ name: 'Karen M.' }, { name: 'Dave T.' }, { name: 'Robbo' }],
+  });
+  // Demo racing data so the TAB screens show something before a live
+  // jurisdiction is configured (Integrations tab enables the real poller).
+  const inMins = (m) => new Date(Date.now() + m * 60000).toISOString();
+  feed('racing', {
+    jurisdiction: 'DEMO',
+    races: [
+      { meeting: 'Randwick', location: 'NSW', type: 'R', number: 6, name: 'City Tattersalls Hcp', distance: 1400, start: inMins(4) },
+      { meeting: 'Menangle', location: 'NSW', type: 'H', number: 3, name: 'Pace 2300m', distance: 2300, start: inMins(9) },
+      { meeting: 'Wentworth Park', location: 'NSW', type: 'G', number: 8, name: 'Sprint 520m', distance: 520, start: inMins(15) },
+      { meeting: 'Flemington', location: 'VIC', type: 'R', number: 5, name: 'Straight Six', distance: 1200, start: inMins(21) },
+    ],
+    results: [
+      { meeting: 'Rosehill', number: 4, type: 'R', name: 'Midway Hcp', placings: ['1st #7 Coastal Runner', '2nd #2 Midnight Ale', '3rd #11 Schooner Time'], at: now },
+      { meeting: 'Albion Park', number: 2, type: 'G', name: 'Novice 395m', placings: ['1st #1 Fast Eddie', '2nd #6 Backbar Betty', '3rd #3 Tap King'], at: now },
+    ],
   });
   feed('sports', {
     fixtures: [

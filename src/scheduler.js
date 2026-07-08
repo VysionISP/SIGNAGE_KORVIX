@@ -126,6 +126,29 @@ function playlistItems(playlistId) {
   }));
 }
 
+// Dedicated channels: the screen skips schedules and permanently shows one
+// live widget (racing next-to-go boards, results, sports fixtures).
+const CHANNELS = {
+  racing1: { widget: 'racing:1', name: 'Racing — Next To Go' },
+  racing2: { widget: 'racing:2', name: 'Racing — 2nd Race' },
+  racing3: { widget: 'racing:3', name: 'Racing — 3rd Race' },
+  'racing-results': { widget: 'racing:results', name: 'Racing — Results' },
+  sports: { widget: 'sports', name: 'Sports — Live & Upcoming' },
+};
+
+function channelPlaylist(channel) {
+  const def = CHANNELS[channel];
+  if (!def) return null;
+  return {
+    id: `channel:${channel}`,
+    name: def.name,
+    items: [{
+      id: `channel:${channel}`, media_id: `channel:${channel}`, name: def.name,
+      type: 'widget', src: def.widget, content: '', fit: 'cover', duration: 30,
+    }],
+  };
+}
+
 // The full document a player needs to run autonomously until the next nudge.
 function buildManifest(screen) {
   const venue = db.get('SELECT * FROM venues WHERE id = ?', screen.venue_id);
@@ -133,7 +156,8 @@ function buildManifest(screen) {
   const emergency = activeEmergency(screen.venue_id);
   const draw = activeDraw(screen);
   const game = cashking.currentGame(screen.venue_id);
-  const schedule = resolveSchedule(screen);
+  const dedicated = channelPlaylist(screen.channel);
+  const schedule = dedicated ? null : resolveSchedule(screen);
   const playlist = schedule
     ? db.get('SELECT * FROM playlists WHERE id = ?', schedule.playlist_id)
     : null;
@@ -152,6 +176,7 @@ function buildManifest(screen) {
       name: screen.name,
       orientation: screen.orientation,
       rotation: screen.rotation || 0,
+      channel: screen.channel || 'main',
     },
     venue: { id: venue.id, name: venue.name, timezone: venue.timezone },
     zone: zone ? { id: zone.id, name: zone.name } : null,
@@ -179,11 +204,11 @@ function buildManifest(screen) {
       };
     })(),
     schedule: schedule && { id: schedule.id, name: schedule.name, ends: schedule.end_time },
-    playlist: playlist && {
+    playlist: dedicated || (playlist && {
       id: playlist.id,
       name: playlist.name,
       items: playlistItems(playlist.id),
-    },
+    }),
     feeds,
   };
 }

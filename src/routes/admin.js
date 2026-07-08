@@ -92,14 +92,20 @@ route('PATCH', '/api/venues/:id', async (req, res, params) => {
     if (!db.get('SELECT id FROM orgs WHERE id = ?', body.org_id ?? '')) throw new HttpError(400, 'unknown business');
     orgId = body.org_id;
   }
-  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, latitude = ?, longitude = ?, org_id = ? WHERE id = ?',
+  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, latitude = ?, longitude = ?, racing_jurisdiction = ?, org_id = ? WHERE id = ?',
     body.name ?? venue.name, body.timezone ?? venue.timezone, body.address ?? venue.address,
     body.latitude !== undefined ? numOrNull(body.latitude) : venue.latitude,
     body.longitude !== undefined ? numOrNull(body.longitude) : venue.longitude,
+    body.racing_jurisdiction !== undefined
+      ? (body.racing_jurisdiction ? String(body.racing_jurisdiction).trim().toUpperCase() : null)
+      : venue.racing_jurisdiction,
     orgId,
     venue.id);
   if (body.latitude !== undefined || body.longitude !== undefined) {
     require('../monitor').refreshWeather(); // async, fire-and-forget
+  }
+  if (body.racing_jurisdiction !== undefined) {
+    require('../racing').pollOnce().catch(() => {}); // fetch races right away
   }
   sendJson(res, 200, db.get('SELECT * FROM venues WHERE id = ?', venue.id));
 });
@@ -150,6 +156,7 @@ route('POST', '/api/venues/:venueId/screens', async (req, res, params) => {
 });
 
 const ROTATIONS = new Set([0, 90, 180, 270]);
+const SCREEN_CHANNELS = new Set(['main', 'racing1', 'racing2', 'racing3', 'racing-results', 'sports']);
 
 route('PATCH', '/api/screens/:id', async (req, res, params) => {
   const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
@@ -160,11 +167,15 @@ route('PATCH', '/api/screens/:id', async (req, res, params) => {
     rotation = parseInt(body.rotation, 10);
     if (!ROTATIONS.has(rotation)) throw new HttpError(400, 'rotation must be 0, 90, 180 or 270');
   }
-  db.run('UPDATE screens SET name = ?, zone_id = ?, orientation = ?, rotation = ? WHERE id = ?',
+  if (body.channel !== undefined && !SCREEN_CHANNELS.has(body.channel)) {
+    throw new HttpError(400, `channel must be one of: ${[...SCREEN_CHANNELS].join(', ')}`);
+  }
+  db.run('UPDATE screens SET name = ?, zone_id = ?, orientation = ?, rotation = ?, channel = ? WHERE id = ?',
     body.name ?? screen.name,
     body.zone_id !== undefined ? (body.zone_id || null) : screen.zone_id,
     body.orientation ?? screen.orientation,
     rotation,
+    body.channel ?? screen.channel ?? 'main',
     screen.id);
   if (screen.device_key) sse.send(screen.device_key, 'refresh', { reason: 'screen-updated' });
   sendJson(res, 200, withStatus(db.get('SELECT * FROM screens WHERE id = ?', screen.id)));

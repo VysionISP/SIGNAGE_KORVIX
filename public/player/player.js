@@ -12,9 +12,17 @@
 
   // Dashboard live-preview: /player/?preview=<deviceKey> renders exactly what
   // that screen shows, without heartbeating or affecting its online status.
-  const previewKey = new URLSearchParams(location.search).get('preview');
+  const urlParams = new URLSearchParams(location.search);
+  const previewKey = urlParams.get('preview');
 
-  let deviceKey = previewKey || localStorage.getItem(STORE_KEY) || null;
+  // Kiosk URL: /player/?key=<deviceKey> pins this browser to its paired
+  // screen permanently — pairing survives page refreshes, reboots and TV
+  // browsers that wipe localStorage. If the key was revoked (screen unpaired
+  // or deleted), it's remembered as dead so the normal pairing flow can run.
+  const urlKey = urlParams.get('key');
+  const usableUrlKey = urlKey && localStorage.getItem('korvix.dead_url_key') !== urlKey ? urlKey : null;
+
+  let deviceKey = previewKey || usableUrlKey || localStorage.getItem(STORE_KEY) || null;
   let manifest = null;
   const playQueue = []; // proof-of-play events, flushed with each heartbeat
   let eventSource = null;
@@ -57,6 +65,14 @@
     }
     try {
       const state = await hello();
+      if (usableUrlKey) {
+        if (state.status === 'paired' && state.device_key === usableUrlKey) {
+          localStorage.removeItem('korvix.dead_url_key');
+        } else if (state.device_key !== usableUrlKey) {
+          // The pinned key is no longer valid — don't fight it on every boot.
+          localStorage.setItem('korvix.dead_url_key', usableUrlKey);
+        }
+      }
       deviceKey = state.device_key;
       localStorage.setItem(STORE_KEY, deviceKey);
       setConnected(true);
@@ -278,8 +294,56 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  // Live countdown ticker for racing widgets: elements carrying data-jump
+  // (an ISO start time) get re-formatted every second, no re-render needed.
+  function fmtJump(ms) {
+    if (ms <= -150000) return 'RACING';
+    if (ms <= 0) return 'JUMPING';
+    const total = Math.floor(ms / 1000);
+    const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m ${String(s).padStart(2, '0')}s`;
+  }
+  setInterval(() => {
+    document.querySelectorAll('[data-jump]').forEach((el) => {
+      const ms = Date.parse(el.dataset.jump) - Date.now();
+      el.textContent = fmtJump(ms);
+      el.style.color = ms <= 120000 ? '#f87171' : '';
+    });
+  }, 1000);
+
+  const RACE_ICON = { R: '🏇', H: '🐎', G: '🐕' };
+
+  function racingWidget(sub) {
+    const racing = ((manifest && manifest.feeds) || {}).racing || {};
+    if (sub === 'results') {
+      const results = racing.results || [];
+      const rows = results.slice(0, 5).map((r) => `
+        <div style="text-align:left;margin-bottom:1.6vh">
+          <div style="font-size:2.2vw;font-weight:700">${RACE_ICON[r.type] || '🏇'} ${esc(r.meeting)} R${esc(r.number)}</div>
+          <div style="font-size:1.9vw;opacity:.9">${(r.placings || []).map(esc).join(' &nbsp;·&nbsp; ')}</div>
+        </div>`).join('');
+      return widgetShell('RACING RESULTS',
+        rows || '<div style="opacity:.7;font-size:2.5vw">Results will appear here as races settle…</div>',
+        '#1c1917,#44403c');
+    }
+    const idx = parseInt(sub, 10) - 1;
+    const race = (racing.races || [])[idx];
+    const kicker = ['NEXT TO GO', '2ND RACE', '3RD RACE'][idx] || 'RACING';
+    if (!race) {
+      return widgetShell(kicker, '<h1>🏇 Racing</h1><div style="opacity:.7;font-size:2.4vw">Awaiting racing feed…</div>', '#052e16,#14532d');
+    }
+    return widgetShell(kicker,
+      `<h1 style="font-size:5vw">${RACE_ICON[race.type] || '🏇'} ${esc(race.meeting)} <span style="opacity:.8">R${esc(race.number)}</span></h1>` +
+      `<div style="font-size:2.3vw;opacity:.9">${esc(race.name)}${race.distance ? ` · ${esc(race.distance)}m` : ''}${race.location ? ` · ${esc(race.location)}` : ''}</div>` +
+      `<div class="big" data-jump="${esc(race.start)}" style="margin-top:2vh">--</div>` +
+      `<div style="font-size:1.9vw;opacity:.7;margin-top:1vh">${(racing.races || []).slice(idx + 1, idx + 3).map((n) => `${esc(n.meeting)} R${esc(n.number)}`).join(' &nbsp;then&nbsp; ')}</div>`,
+      '#052e16,#14532d');
+  }
+
   function renderWidget(name) {
     const feeds = (manifest && manifest.feeds) || {};
+    if (name.startsWith('racing:')) return racingWidget(name.slice(7));
     switch (name) {
       case 'jackpot': {
         const jackpots = (feeds.gaming && feeds.gaming.jackpots) || [];

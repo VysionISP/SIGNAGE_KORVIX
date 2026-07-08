@@ -226,6 +226,11 @@ function migrate() {
   if (!screenCols.includes('rotation')) {
     db.exec('ALTER TABLE screens ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0');
   }
+  if (!screenCols.includes('channel')) {
+    // main = scheduled playlists; racing1/2/3, racing-results, sports = the
+    // screen is dedicated to that live channel and ignores schedules.
+    db.exec("ALTER TABLE screens ADD COLUMN channel TEXT NOT NULL DEFAULT 'main'");
+  }
   if (!screenCols.includes('alerted')) {
     // 1 while an offline alert is outstanding, so we alert once per outage.
     db.exec('ALTER TABLE screens ADD COLUMN alerted INTEGER NOT NULL DEFAULT 0');
@@ -243,6 +248,10 @@ function migrate() {
     // Set to enable automatic weather feeds (Open-Meteo, no API key needed).
     db.exec('ALTER TABLE venues ADD COLUMN latitude REAL');
     db.exec('ALTER TABLE venues ADD COLUMN longitude REAL');
+  }
+  if (!venueCols.includes('racing_jurisdiction')) {
+    // Set (NSW/VIC/QLD/...) to enable the built-in TAB next-to-go poller.
+    db.exec('ALTER TABLE venues ADD COLUMN racing_jurisdiction TEXT');
   }
   if (!venueCols.includes('org_id')) {
     db.exec('ALTER TABLE venues ADD COLUMN org_id TEXT');

@@ -258,12 +258,19 @@
 
     $('#tab-screens').innerHTML = `
       <h2>Screens</h2>
+      <p class="muted">Channel: <b>Main</b> plays scheduled playlists; <b>Racing</b> screens are dedicated
+      next-to-go / results boards fed live (set the jurisdiction on the Integrations tab); <b>Sports</b> shows the fixtures feed full-time.</p>
       <table>
-        <thead><tr><th>Name</th><th>Zone</th><th>Rotation</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Zone</th><th>Channel</th><th>Rotation</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
         <tbody>${screens.map((s) => `
           <tr>
             <td>${esc(s.name)} <span class="muted">${s.orientation}</span></td>
             <td class="muted">${esc(zoneName(s.zone_id))}</td>
+            <td><select data-channel="${s.id}">
+              ${[['main', 'Main (playlists)'], ['racing1', 'Racing — Next To Go'], ['racing2', 'Racing — 2nd race'],
+                 ['racing3', 'Racing — 3rd race'], ['racing-results', 'Racing — Results'], ['sports', 'Sports']]
+                .map(([v, label]) => `<option value="${v}" ${(s.channel || 'main') === v ? 'selected' : ''}>${label}</option>`).join('')}
+            </select></td>
             <td><select data-rotate="${s.id}">
               ${[0, 90, 180, 270].map((r) => `<option value="${r}" ${(s.rotation || 0) === r ? 'selected' : ''}>${r}&deg;</option>`).join('')}
             </select></td>
@@ -272,11 +279,12 @@
             <td class="row" style="justify-content:flex-end">
               ${s.device_key
                 ? `<a class="btn small secondary" href="/player/?preview=${esc(s.device_key)}" target="_blank" style="text-decoration:none">👁 Preview</a>
+                   <button class="btn small secondary" data-act="kiosk" data-key="${esc(s.device_key)}">Copy kiosk URL</button>
                    <button class="btn small secondary" data-act="unpair" data-id="${s.id}">Unpair</button>`
                 : `<button class="btn small" data-act="pair" data-id="${s.id}">Pair device</button>`}
               <button class="btn small danger" data-act="del-screen" data-id="${s.id}">Delete</button>
             </td>
-          </tr>`).join('') || '<tr><td class="muted" colspan="6">No screens yet</td></tr>'}
+          </tr>`).join('') || '<tr><td class="muted" colspan="7">No screens yet</td></tr>'}
         </tbody>
       </table>
 
@@ -299,7 +307,9 @@
       </div>
 
       <h2>Unpaired player devices</h2>
-      <p class="muted">Open <a href="/player/" target="_blank">/player/</a> on any screen — it shows a pairing code. Claim it with the “Pair device” button on a screen above.</p>
+      <p class="muted">Open <a href="/player/" target="_blank">/player/</a> on any screen — it shows a pairing code. Claim it with the “Pair device” button on a screen above.
+      Then set that screen's <b>kiosk URL</b> as the TV browser's homepage — it pins the pairing permanently, surviving refreshes,
+      reboots and TV browsers that wipe their storage.</p>
       <table><tbody>
         ${pairings.map((pr) => `<tr><td style="font-family:monospace;font-size:16px;letter-spacing:.2em">${esc(pr.pairing_code)}</td>
           <td class="muted">registered ${new Date(pr.created_at).toLocaleString()}</td></tr>`).join('')
@@ -321,13 +331,21 @@
       await refresh();
     };
     $('#tab-screens').onchange = async (e) => {
-      const sel = e.target.closest('[data-rotate]');
-      if (!sel) return;
-      await api('PATCH', `/api/screens/${sel.dataset.rotate}`, { rotation: parseInt(sel.value, 10) });
+      const rotate = e.target.closest('[data-rotate]');
+      if (rotate) return api('PATCH', `/api/screens/${rotate.dataset.rotate}`, { rotation: parseInt(rotate.value, 10) });
+      const channel = e.target.closest('[data-channel]');
+      if (channel) return api('PATCH', `/api/screens/${channel.dataset.channel}`, { channel: channel.value });
     };
     $('#tab-screens').onclick = async (e) => {
       const el = e.target.closest('[data-act]');
       if (!el) return;
+      if (el.dataset.act === 'kiosk') {
+        const url = `${location.origin}/player/?key=${el.dataset.key}`;
+        try { await navigator.clipboard.writeText(url); el.textContent = 'Copied ✓'; }
+        catch { prompt('Kiosk URL — set as the TV browser homepage:', url); }
+        setTimeout(() => { el.textContent = 'Copy kiosk URL'; }, 1500);
+        return;
+      }
       e.preventDefault();
       const screenId = el.dataset.id;
       if (el.dataset.act === 'pair') {
@@ -966,6 +984,22 @@
         </div>
       </div>
 
+      <h2>Racing feed 🏇</h2>
+      <div class="card">
+        <p class="muted" style="margin-top:0">Pick a jurisdiction and the CMS polls the TAB next-to-go API every 45 seconds —
+        screens on the Racing channels (Screens tab) show the next three races with live countdowns, plus results as they settle.
+        Venues with a licensed data supplier can instead push to the <code>racing</code> webhook below.</p>
+        <div class="row">
+          <select id="rc-jur">
+            <option value="">Racing feed off</option>
+            ${['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'].map((j) =>
+              `<option ${((v.racing_jurisdiction || '')) === j ? 'selected' : ''}>${j}</option>`).join('')}
+          </select>
+          <button class="btn small" id="rc-save">Save</button>
+          ${feeds.find((f) => f.source === 'racing') ? '<span class="pill online">feed active</span>' : ''}
+        </div>
+      </div>
+
       <h2>Live data feeds</h2>
       <p class="muted">POS, gaming, weather and other systems push JSON here; widgets on screen render it live. Any update refreshes affected screens instantly.</p>
       <div class="cards">
@@ -1002,6 +1036,10 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
         latitude: $('#wx-lat').value || null,
         longitude: $('#wx-lon').value || null,
       });
+      await refresh();
+    };
+    $('#rc-save').onclick = async () => {
+      await api('PATCH', `/api/venues/${venueId}`, { racing_jurisdiction: $('#rc-jur').value || null });
       await refresh();
     };
   }

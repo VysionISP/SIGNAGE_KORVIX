@@ -176,6 +176,7 @@ function start(port = PORT, host = HOST) {
     console.log('[korvix] empty database — seeded "The Korvix Tavern" demo venue');
   }
   monitor.start();
+  require('./racing').start();
   return new Promise((resolve) => {
     server.listen(port, host, () => {
       const addr = server.address();
