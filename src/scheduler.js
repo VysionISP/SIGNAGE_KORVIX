@@ -184,7 +184,12 @@ function buildManifest(screen) {
   const emergency = activeEmergency(screen.venue_id);
   const draw = activeDraw(screen);
   const game = cashking.currentGame(screen.venue_id);
-  const dedicated = channelPlaylist(screen.channel);
+  // Licence enforcement: 'basic' screens play scheduled content only — no
+  // game takeovers, no dedicated racing/sports channels. Emergencies always
+  // show (safety is not a billing tier).
+  const isMainLicense = (screen.license || 'main') === 'main';
+
+  const dedicated = isMainLicense ? channelPlaylist(screen.channel) : null;
   const schedule = dedicated ? null : resolveSchedule(screen);
   const playlist = schedule
     ? db.get('SELECT * FROM playlists WHERE id = ?', schedule.playlist_id)
@@ -205,8 +210,9 @@ function buildManifest(screen) {
       name: screen.name,
       orientation: screen.orientation,
       rotation: screen.rotation || 0,
-      channel: screen.channel || 'main',
+      channel: isMainLicense ? (screen.channel || 'main') : 'main',
       layout: screen.layout || 'full',
+      license: screen.license || 'main',
     },
     // Split-screen extras: a side-panel rotation and a bottom ticker strip.
     side_playlist: (screen.layout === 'side' || screen.layout === 'side-ticker') && screen.side_playlist_id
@@ -236,12 +242,13 @@ function buildManifest(screen) {
       message: emergency.message,
     },
     // Live board takes over every venue screen; the promo view feeds the
-    // 'cashking' playlist widget between game nights.
-    card_game: game && game.live ? cashking.boardView(game) : null,
-    wheel: (() => { const w = games.currentWheel(screen.venue_id); return w && w.live ? games.wheelView(w) : null; })(),
-    badge_draw: (() => { const b = games.currentBadge(screen.venue_id); return b && b.live ? games.badgeView(b) : null; })(),
+    // 'cashking' playlist widget between game nights. Takeovers are a
+    // Main-licence feature; promo widgets are just content and play anywhere.
+    card_game: isMainLicense && game && game.live ? cashking.boardView(game) : null,
+    wheel: (() => { if (!isMainLicense) return null; const w = games.currentWheel(screen.venue_id); return w && w.live ? games.wheelView(w) : null; })(),
+    badge_draw: (() => { if (!isMainLicense) return null; const b = games.currentBadge(screen.venue_id); return b && b.live ? games.badgeView(b) : null; })(),
     card_game_promo: game ? cashking.promoView(game, venue.name) : null,
-    draw: draw && (() => {
+    draw: (isMainLicense ? draw : null) && (() => {
       let numbers = [];
       try { numbers = JSON.parse(draw.drawn_numbers); } catch { /* ignore */ }
       return {

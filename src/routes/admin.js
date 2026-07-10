@@ -250,6 +250,7 @@ route('POST', '/api/venues/:venueId/screens', async (req, res, params) => {
 const ROTATIONS = new Set([0, 90, 180, 270]);
 const SCREEN_CHANNELS = new Set(['main', 'racing1', 'racing2', 'racing3', 'racing-results', 'sports']);
 const LAYOUTS = new Set(['full', 'side', 'ticker', 'side-ticker']);
+const LICENSES = new Set(['main', 'basic']);
 
 route('PATCH', '/api/screens/:id', async (req, res, params) => {
   const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
@@ -270,15 +271,34 @@ route('PATCH', '/api/screens/:id', async (req, res, params) => {
     const pl = db.get('SELECT venue_id FROM playlists WHERE id = ?', body.side_playlist_id);
     if (!pl || pl.venue_id !== screen.venue_id) throw new HttpError(400, 'unknown side playlist');
   }
-  db.run('UPDATE screens SET name = ?, zone_id = ?, orientation = ?, rotation = ?, channel = ?, layout = ?, side_playlist_id = ? WHERE id = ?',
+  // Licence tier drives billing. Downgrading to basic drops any premium
+  // channel back to main; putting a channel on a basic screen needs an upgrade.
+  let license = screen.license || 'main';
+  if (body.license !== undefined) {
+    if (!LICENSES.has(body.license)) throw new HttpError(400, 'license must be main or basic');
+    license = body.license;
+  }
+  let channel = body.channel ?? screen.channel ?? 'main';
+  if (license === 'basic' && channel !== 'main') {
+    if (body.channel !== undefined && body.license === undefined) {
+      throw new HttpError(400, 'racing/sports channels need a Main licence — upgrade this screen first');
+    }
+    channel = 'main'; // downgrade resets the channel
+  }
+  db.run('UPDATE screens SET name = ?, zone_id = ?, orientation = ?, rotation = ?, channel = ?, layout = ?, side_playlist_id = ?, license = ? WHERE id = ?',
     body.name ?? screen.name,
     body.zone_id !== undefined ? (body.zone_id || null) : screen.zone_id,
     body.orientation ?? screen.orientation,
     rotation,
-    body.channel ?? screen.channel ?? 'main',
+    channel,
     body.layout ?? screen.layout ?? 'full',
     body.side_playlist_id !== undefined ? (body.side_playlist_id || null) : screen.side_playlist_id,
+    license,
     screen.id);
+  if (body.license !== undefined && body.license !== screen.license) {
+    db.logEvent('screen.license', { venueId: screen.venue_id, screenId: screen.id,
+      detail: `${screen.name}: ${screen.license || 'main'} -> ${license}`, actor: actorOf(req) });
+  }
   if (screen.device_key) sse.send(screen.device_key, 'refresh', { reason: 'screen-updated' });
   sendJson(res, 200, withStatus(db.get('SELECT * FROM screens WHERE id = ?', screen.id)));
 });
@@ -680,6 +700,77 @@ route('DELETE', '/api/draws/:id', (req, res, params) => {
   db.run('DELETE FROM draws WHERE id = ?', params.id);
   if (draw && draw.status === 'live') nudgeVenue(draw.venue_id);
   sendJson(res, 200, { ok: true });
+});
+
+// ---- Licensing & billing ---------------------------------------------------
+//
+// Two screen tiers: 'main' (everything — game takeovers, racing/sports
+// channels) and 'basic' (playlists, menus, widgets). Prices are per screen
+// per month, set by the superadmin; only PAIRED screens are billed, so
+// placeholder screens cost nothing until a device is actually on the wall.
+
+const DEFAULT_PRICES = { main: 49, basic: 19 };
+
+function licensePrices() {
+  try {
+    const stored = JSON.parse(db.getSetting('license_prices') || '{}');
+    return {
+      main: Number.isFinite(Number(stored.main)) ? Number(stored.main) : DEFAULT_PRICES.main,
+      basic: Number.isFinite(Number(stored.basic)) ? Number(stored.basic) : DEFAULT_PRICES.basic,
+    };
+  } catch { return { ...DEFAULT_PRICES }; }
+}
+
+route('GET', '/api/billing', (req, res) => {
+  auth.requireRole(req.user, 'admin'); // org admins see their own bill
+  const prices = licensePrices();
+  const orgs = req.user.role === 'superadmin'
+    ? db.all('SELECT * FROM orgs ORDER BY name')
+    : db.all('SELECT * FROM orgs WHERE id = ?', req.user.org_id ?? '');
+
+  const businesses = orgs.map((org) => {
+    const venues = db.all('SELECT * FROM venues WHERE org_id = ? ORDER BY name', org.id).map((v) => {
+      const screens = db.all('SELECT license, device_key FROM screens WHERE venue_id = ?', v.id);
+      const paired = screens.filter((s) => s.device_key);
+      const main = paired.filter((s) => (s.license || 'main') === 'main').length;
+      const basic = paired.length - main;
+      return {
+        id: v.id, name: v.name, main, basic,
+        unpaired: screens.length - paired.length,
+        monthly: main * prices.main + basic * prices.basic,
+      };
+    });
+    const main = venues.reduce((n, v) => n + v.main, 0);
+    const basic = venues.reduce((n, v) => n + v.basic, 0);
+    return {
+      id: org.id, name: org.name, venues, main, basic,
+      unpaired: venues.reduce((n, v) => n + v.unpaired, 0),
+      monthly: main * prices.main + basic * prices.basic,
+    };
+  });
+
+  sendJson(res, 200, {
+    prices,
+    businesses,
+    total_monthly: businesses.reduce((n, b) => n + b.monthly, 0),
+  });
+});
+
+route('PATCH', '/api/billing/prices', async (req, res) => {
+  auth.requireRole(req.user, 'superadmin');
+  const body = await readJson(req);
+  const current = licensePrices();
+  const clean = (v, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : fallback;
+  };
+  const prices = {
+    main: body.main !== undefined ? clean(body.main, current.main) : current.main,
+    basic: body.basic !== undefined ? clean(body.basic, current.basic) : current.basic,
+  };
+  db.setSetting('license_prices', JSON.stringify(prices));
+  db.logEvent('billing.prices', { detail: `main $${prices.main} / basic $${prices.basic} per screen/mo`, actor: actorOf(req) });
+  sendJson(res, 200, { prices });
 });
 
 // ---- Fleet health & events ---------------------------------------------------

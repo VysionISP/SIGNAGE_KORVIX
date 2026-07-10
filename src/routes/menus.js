@@ -24,7 +24,7 @@ function cleanSections(raw) {
     title: String(section.title || '').slice(0, 60),
     items: (Array.isArray(section.items) ? section.items : []).slice(0, 60).map((item) => ({
       name: String(item.name || '').slice(0, 80),
-      desc: String(item.desc || '').slice(0, 160),
+      desc: String(item.desc || '').slice(0, 300),
       price: item.price === '' || item.price === null || item.price === undefined
         ? null : (Number.isFinite(Number(item.price)) ? Number(item.price) : null),
       sold_out: !!item.sold_out,

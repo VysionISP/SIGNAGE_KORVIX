@@ -295,6 +295,22 @@ product works fully without them. Once configured you get:
   that business is emailed when one of its screens drops off (and again on
   recovery). The `KORVIX_ALERT_WEBHOOK` keeps firing regardless.
 
+### Licensing & billing
+
+Every **paired** screen carries a monthly licence, set per screen on the
+Screens tab:
+
+- **Main** — everything: game takeovers (raffle draws, CashKing, wheel spin,
+  badge draw) and the dedicated racing/sports channels.
+- **Basic** — advertising, menu boards, playlists, schedules and widgets only.
+  Game takeovers and premium channels never reach a basic screen (emergency
+  broadcasts always do — safety is not a billing tier).
+
+The **Billing** tab (Settings → Billing) is the invoicing dashboard: the
+superadmin sets the two per-screen prices, sees every business's monthly bill
+broken down by venue, and exports a CSV for invoicing. Business admins see
+their own bill at the same place. Unpaired placeholder screens cost nothing.
+
 ### Backups
 
 A `VACUUM INTO` snapshot of the database lands in `data/backups/` once per day

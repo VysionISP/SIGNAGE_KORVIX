@@ -204,7 +204,7 @@
     {
       label: 'Settings',
       tabs: [['venue', 'Venue', 'admin'], ['integrations', 'Integrations'], ['reports', 'Reports'],
-        ['users', 'Users', 'admin'], ['orgs', 'Businesses', 'superadmin']],
+        ['users', 'Users', 'admin'], ['orgs', 'Businesses', 'superadmin'], ['billing', 'Billing', 'admin']],
     },
   ];
 
@@ -271,7 +271,7 @@
       playlists: renderPlaylists, schedules: renderSchedules, draws: renderDraws,
       emergency: renderEmergency, integrations: renderIntegrations, reports: renderReports,
       users: renderUsers, orgs: renderOrgs, cashking: renderCashKing, tablet: renderTablet,
-      venue: renderVenueSettings, menus: renderMenus,
+      venue: renderVenueSettings, menus: renderMenus, billing: renderBilling,
     };
     await renderers[activeTab]();
     await renderBanner();
@@ -363,12 +363,16 @@
       <p class="muted">Channel: <b>Main</b> plays scheduled playlists; <b>Racing</b> screens are dedicated
       next-to-go / results boards fed live (set the jurisdiction on the Integrations tab); <b>Sports</b> shows the fixtures feed full-time.</p>
       <table>
-        <thead><tr><th>Name</th><th>Zone</th><th>Channel</th><th>Layout</th><th>Rotation</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Zone</th><th>Licence</th><th>Channel</th><th>Layout</th><th>Rotation</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
         <tbody>${screens.map((s) => `
           <tr>
             <td>${esc(s.name)} <span class="muted">${s.orientation}</span></td>
             <td class="muted">${esc(zoneName(s.zone_id))}</td>
-            <td><select data-channel="${s.id}">
+            <td><select data-license="${s.id}" title="Billing tier — Main includes game takeovers and racing/sports channels">
+              <option value="main" ${(s.license || 'main') === 'main' ? 'selected' : ''}>Main — full</option>
+              <option value="basic" ${s.license === 'basic' ? 'selected' : ''}>Basic — ads only</option>
+            </select></td>
+            <td><select data-channel="${s.id}" ${s.license === 'basic' ? 'disabled title="Racing/sports channels need a Main licence"' : ''}>
               ${[['main', 'Main (playlists)'], ['racing1', 'Racing — Next To Go'], ['racing2', 'Racing — 2nd race'],
                  ['racing3', 'Racing — 3rd race'], ['racing-results', 'Racing — Results'], ['sports', 'Sports']]
                 .map(([v, label]) => `<option value="${v}" ${(s.channel || 'main') === v ? 'selected' : ''}>${label}</option>`).join('')}
@@ -450,6 +454,8 @@
       await refresh();
     };
     $('#tab-screens').onchange = async (e) => {
+      const license = e.target.closest('[data-license]');
+      if (license) { await api('PATCH', `/api/screens/${license.dataset.license}`, { license: license.value }); return render(); }
       const rotate = e.target.closest('[data-rotate]');
       if (rotate) return api('PATCH', `/api/screens/${rotate.dataset.rotate}`, { rotation: parseInt(rotate.value, 10) });
       const channel = e.target.closest('[data-channel]');
@@ -828,19 +834,24 @@
        <a href="#" data-mn-clearphoto title="Remove photo" style="color:var(--bad);font-size:11px">✕</a>`
     : '<button class="btn small secondary" data-mn-photobtn title="Add a photo of this dish">📷</button>';
 
+  // Two-line rows: the description gets its own full-width line under its
+  // item, so it's obvious which dish a blurb belongs to.
   const itemRowHtml = (item = {}) => `
-    <div class="row" data-mn-item style="margin-top:6px;flex-wrap:nowrap">
-      <span data-mn-photocell style="white-space:nowrap">${photoCellHtml(item.photo)}</span>
-      <input type="hidden" data-mn-iphoto value="${esc(item.photo || '')}">
-      <input data-mn-iname placeholder="Item — e.g. Chicken Schnitzel" value="${esc(item.name || '')}" style="flex:2;min-width:140px">
-      <input data-mn-idesc placeholder="Description (optional)" value="${esc(item.desc || '')}" style="flex:3;min-width:120px">
-      <input data-mn-iprice type="number" step="0.5" placeholder="$" value="${item.price ?? ''}" style="width:84px">
-      <label style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap"
-        title="Featured items show as a big hero card with a large photo at the top of the board">
-        <input type="checkbox" data-mn-ifeat ${item.featured ? 'checked' : ''}>⭐</label>
-      <label style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap">
-        <input type="checkbox" data-mn-isold ${item.sold_out ? 'checked' : ''}>sold out</label>
-      <button class="btn small danger" data-mn-delitem>✕</button>
+    <div data-mn-item style="margin-top:10px;padding-bottom:8px;border-bottom:1px dashed var(--line)">
+      <div class="row" style="flex-wrap:nowrap">
+        <span data-mn-photocell style="white-space:nowrap">${photoCellHtml(item.photo)}</span>
+        <input type="hidden" data-mn-iphoto value="${esc(item.photo || '')}">
+        <input data-mn-iname maxlength="80" placeholder="Item — e.g. Chicken Schnitzel" value="${esc(item.name || '')}" style="flex:1;min-width:140px;font-weight:600">
+        <input data-mn-iprice type="number" step="0.5" placeholder="$" value="${item.price ?? ''}" style="width:84px">
+        <label style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap"
+          title="Featured items show as a big hero card with a large photo at the top of the board">
+          <input type="checkbox" data-mn-ifeat ${item.featured ? 'checked' : ''}>⭐</label>
+        <label style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap">
+          <input type="checkbox" data-mn-isold ${item.sold_out ? 'checked' : ''}>sold out</label>
+        <button class="btn small danger" data-mn-delitem>✕</button>
+      </div>
+      <input data-mn-idesc maxlength="300" placeholder="↳ Description (optional)"
+        value="${esc(item.desc || '')}" style="width:100%;margin-top:5px;font-size:13px;color:var(--muted)">
     </div>`;
 
   const MENU_THEME_OPTIONS = [
@@ -1931,6 +1942,89 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
         await api('DELETE', `/api/orgs/${del.dataset.delorg}`);
         render();
       }
+    };
+  }
+
+  // ---- licensing & billing ----------------------------------------------------------------
+
+  async function renderBilling() {
+    const bill = await api('GET', '/api/billing');
+    const $$ = (n) => '$' + Number(n).toLocaleString('en-AU', { maximumFractionDigits: 2 });
+    const isSuper = hasRole('superadmin');
+
+    const bizRows = bill.businesses.map((b) => `
+      <tr style="font-weight:700">
+        <td>${esc(b.name)}</td>
+        <td>${b.main}</td><td>${b.basic}</td>
+        <td class="muted">${b.unpaired || ''}</td>
+        <td style="text-align:right;font-variant-numeric:tabular-nums">${$$(b.monthly)}</td>
+      </tr>
+      ${b.venues.map((v) => `
+      <tr>
+        <td class="muted" style="padding-left:26px">↳ ${esc(v.name)}</td>
+        <td class="muted">${v.main}</td><td class="muted">${v.basic}</td>
+        <td class="muted">${v.unpaired || ''}</td>
+        <td class="muted" style="text-align:right;font-variant-numeric:tabular-nums">${$$(v.monthly)}</td>
+      </tr>`).join('')}`).join('');
+
+    $('#tab-billing').innerHTML = `
+      <h2>Billing</h2>
+      <p class="muted">Every <b>paired</b> screen is licensed monthly: <b>Main</b> screens include the games
+      (draws, CashKing, wheel, badge draw) and dedicated racing/sports channels; <b>Basic</b> screens play
+      advertising, menus, playlists and widgets only. Set each screen's licence on the Screens tab —
+      unpaired placeholder screens aren't billed.</p>
+
+      ${isSuper ? `
+      <div class="card">
+        <div class="row">
+          <label class="muted">Main screen $<input id="bl-main" type="number" min="0" step="1" value="${bill.prices.main}" style="width:90px"> /screen/month</label>
+          <label class="muted">Basic screen $<input id="bl-basic" type="number" min="0" step="1" value="${bill.prices.basic}" style="width:90px"> /screen/month</label>
+          <button class="btn small" id="bl-save">Save prices</button>
+          <div class="spacer"></div>
+          <button class="btn small secondary" id="bl-csv">⬇ Export CSV for invoicing</button>
+        </div>
+      </div>` : `
+      <div class="card"><div class="row">
+        <div class="muted">Main screen: <b>${$$(bill.prices.main)}</b>/month · Basic screen: <b>${$$(bill.prices.basic)}</b>/month</div>
+      </div></div>`}
+
+      <div class="cards" style="margin-top:14px">
+        <div class="card" style="margin:0"><h3 style="margin:0" class="muted">Main screens</h3>
+          <div class="stat">${bill.businesses.reduce((n, b) => n + b.main, 0)}</div></div>
+        <div class="card" style="margin:0"><h3 style="margin:0" class="muted">Basic screens</h3>
+          <div class="stat">${bill.businesses.reduce((n, b) => n + b.basic, 0)}</div></div>
+        <div class="card" style="margin:0"><h3 style="margin:0" class="muted">Monthly ${isSuper ? 'revenue' : 'total'}</h3>
+          <div class="stat" style="color:var(--accent)">${$$(bill.total_monthly)}</div></div>
+      </div>
+
+      <table style="margin-top:14px">
+        <thead><tr><th>${isSuper ? 'Business / venue' : 'Venue'}</th><th>Main</th><th>Basic</th><th>Unpaired (free)</th><th style="text-align:right">Per month</th></tr></thead>
+        <tbody>${bizRows || '<tr><td class="muted" colspan="5">No businesses yet</td></tr>'}</tbody>
+      </table>`;
+
+    const save = $('#bl-save');
+    if (save) save.onclick = async () => {
+      await api('PATCH', '/api/billing/prices', {
+        main: parseFloat($('#bl-main').value),
+        basic: parseFloat($('#bl-basic').value),
+      });
+      render();
+    };
+    const csv = $('#bl-csv');
+    if (csv) csv.onclick = () => {
+      const lines = [['business', 'venue', 'main_screens', 'basic_screens', 'main_price', 'basic_price', 'monthly_total'].join(',')];
+      for (const b of bill.businesses) {
+        for (const v of b.venues) {
+          lines.push([JSON.stringify(b.name), JSON.stringify(v.name), v.main, v.basic, bill.prices.main, bill.prices.basic, v.monthly].join(','));
+        }
+        lines.push([JSON.stringify(b.name), '"— total —"', b.main, b.basic, bill.prices.main, bill.prices.basic, b.monthly].join(','));
+      }
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `billing-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
     };
   }
 

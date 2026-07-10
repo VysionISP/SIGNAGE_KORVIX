@@ -1231,3 +1231,106 @@ test('SaaS features: brand, password reset, alerts, sleep, clone, photos, backup
     assert.deepStrictEqual(sent, { skipped: true });
   });
 });
+
+// ---- Licensing & billing ---------------------------------------------------------
+
+test('licensing: main vs basic screens drive features and billing', async (t) => {
+  let orgId, venueId, mainScreen, basicScreen, mainKey, basicKey;
+
+  await t.test('setup: venue with one main + one basic screen, both paired', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'Billing Test Group' });
+    orgId = org.data.id;
+    const venue = await api('POST', '/api/venues', { name: 'Billed Arms Hotel', org_id: orgId });
+    venueId = venue.data.id;
+
+    const pairUp = async (name) => {
+      const screen = await api('POST', `/api/venues/${venueId}/screens`, { name });
+      const hello = await api('POST', '/api/player/hello', {});
+      const paired = await api('POST', `/api/screens/${screen.data.id}/pair`, { pairing_code: hello.data.pairing_code });
+      assert.strictEqual(paired.status, 200);
+      return { id: screen.data.id, key: hello.data.device_key };
+    };
+    ({ id: mainScreen, key: mainKey } = await pairUp('Front Bar TV'));
+    ({ id: basicScreen, key: basicKey } = await pairUp('Bottle Shop Screen'));
+
+    const bad = await api('PATCH', `/api/screens/${basicScreen}`, { license: 'platinum' });
+    assert.strictEqual(bad.status, 400);
+    const set = await api('PATCH', `/api/screens/${basicScreen}`, { license: 'basic' });
+    assert.strictEqual(set.data.license, 'basic');
+  });
+
+  await t.test('basic screens refuse premium channels; downgrade resets them', async () => {
+    const refused = await api('PATCH', `/api/screens/${basicScreen}`, { channel: 'racing1' });
+    assert.strictEqual(refused.status, 400);
+    assert.match(refused.data.error, /Main licence/);
+
+    // main screen takes the channel fine, then downgrading drops it back
+    await api('PATCH', `/api/screens/${mainScreen}`, { channel: 'racing1' });
+    const downgraded = await api('PATCH', `/api/screens/${mainScreen}`, { license: 'basic' });
+    assert.strictEqual(downgraded.data.channel, 'main');
+    await api('PATCH', `/api/screens/${mainScreen}`, { license: 'main' }); // restore
+  });
+
+  await t.test('game takeovers only reach main-licence screens', async () => {
+    const draw = await api('POST', `/api/venues/${venueId}/draws`, {
+      name: 'Meat Raffle', range_start: 1, range_end: 100,
+    });
+    const spun = await api('POST', `/api/draws/${draw.data.id}/draw`);
+    assert.strictEqual(spun.status, 200);
+
+    const mainManifest = await api('GET', `/api/player/${mainKey}/manifest`);
+    assert.ok(mainManifest.data.draw, 'main screen shows the draw');
+    assert.strictEqual(mainManifest.data.screen.license, 'main');
+
+    const basicManifest = await api('GET', `/api/player/${basicKey}/manifest`);
+    assert.strictEqual(basicManifest.data.draw, null, 'basic screen skips the takeover');
+    assert.strictEqual(basicManifest.data.screen.license, 'basic');
+    assert.strictEqual(basicManifest.data.emergency, null); // and no channel leak
+    await api('POST', `/api/draws/${draw.data.id}/clear`);
+  });
+
+  await t.test('emergencies ignore the licence tier', async () => {
+    const em = await api('POST', '/api/emergencies', { venue_id: venueId, level: 'alert', title: 'Test alert' });
+    const basicManifest = await api('GET', `/api/player/${basicKey}/manifest`);
+    assert.ok(basicManifest.data.emergency, 'safety broadcasts reach basic screens');
+    await api('POST', `/api/emergencies/${em.data.id}/clear`);
+  });
+
+  await t.test('billing rolls up paired screens by tier at the configured prices', async () => {
+    const before = await api('GET', '/api/billing');
+    assert.strictEqual(before.status, 200);
+
+    const set = await api('PATCH', '/api/billing/prices', { main: 60, basic: 25 });
+    assert.deepStrictEqual(set.data.prices, { main: 60, basic: 25 });
+
+    const bill = await api('GET', '/api/billing');
+    const biz = bill.data.businesses.find((b) => b.name === 'Billing Test Group');
+    assert.ok(biz, 'business appears on the bill');
+    const venue = biz.venues.find((v) => v.id === venueId);
+    assert.strictEqual(venue.main, 1);
+    assert.strictEqual(venue.basic, 1);
+    assert.strictEqual(venue.monthly, 60 + 25);
+
+    // unpaired screens are free
+    await api('POST', `/api/venues/${venueId}/screens`, { name: 'Placeholder' });
+    const bill2 = await api('GET', '/api/billing');
+    const venue2 = bill2.data.businesses.find((b) => b.id === orgId).venues.find((v) => v.id === venueId);
+    assert.strictEqual(venue2.monthly, 85, 'unpaired screen adds nothing');
+    assert.strictEqual(venue2.unpaired, 1);
+  });
+
+  await t.test('org admins see only their own bill; editors see none', async () => {
+    const admin = await api('POST', '/api/users', {
+      email: 'admin@billedarms.au', password: 'billing-pass-1', role: 'admin', org_id: orgId,
+    });
+    assert.strictEqual(admin.status, 201);
+    const login = await api('POST', '/api/auth/login', { email: 'admin@billedarms.au', password: 'billing-pass-1' });
+    const own = await api('GET', '/api/billing', undefined, login.data.token);
+    assert.strictEqual(own.status, 200);
+    assert.strictEqual(own.data.businesses.length, 1);
+    assert.strictEqual(own.data.businesses[0].id, orgId);
+
+    const priceDenied = await api('PATCH', '/api/billing/prices', { main: 1 }, login.data.token);
+    assert.strictEqual(priceDenied.status, 403);
+  });
+});

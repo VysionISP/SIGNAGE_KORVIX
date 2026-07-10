@@ -477,13 +477,16 @@
     // Featured items break out into a hero strip under the title: big photo,
     // big price, FEATURED tag in the theme accent. They leave the list flow.
     const featured = menu.sections.flatMap((s) => s.items.filter((i) => i.featured)).slice(0, 3);
+    // Photos keep a natural 16:9 crop (aspect-ratio, not a fixed strip) so
+    // dishes aren't beheaded; descriptions clamp at 3 lines so one wordy item
+    // can't blow the card out.
     const heroHtml = featured.length ? `
-      <div style="display:flex;gap:2vw;width:100%;margin-bottom:2.6vh">
+      <div style="display:flex;gap:2vw;width:100%;margin-bottom:2.6vh;align-items:stretch">
         ${featured.map((item) => `
         <div style="flex:1;max-width:${featured.length === 1 ? '46vw' : '30vw'};margin:0 auto;text-align:left;
           border:.15vw solid ${T.section};border-radius:1vw;overflow:hidden;${item.sold_out ? 'opacity:.5;' : ''}
-          box-shadow:0 .8vh 2.5vh rgba(0,0,0,.35)">
-          ${item.photo ? `<img src="${esc(item.photo)}" style="width:100%;height:${featured.length === 1 ? '26vh' : '20vh'};object-fit:cover;display:block">` : ''}
+          box-shadow:0 .8vh 2.5vh rgba(0,0,0,.35);display:flex;flex-direction:column">
+          ${item.photo ? `<img src="${esc(item.photo)}" style="width:100%;aspect-ratio:16/9;height:auto;object-fit:cover;object-position:center;display:block">` : ''}
           <div style="padding:1.2vh 1.2vw 1.5vh">
             <div style="font-size:1.15vw;font-weight:800;letter-spacing:.25em;color:${T.section};${T.sectionExtra || ''}">★ FEATURED${item.sold_out ? ' · SOLD OUT' : ''}</div>
             <div style="display:flex;align-items:baseline;gap:1vw;margin-top:.5vh">
@@ -491,7 +494,7 @@
               <span style="flex:1"></span>
               <span style="font-size:2.6vw;font-weight:900;color:${T.section};font-variant-numeric:tabular-nums">${price(item.price)}</span>
             </div>
-            ${item.desc ? `<div style="font-size:1.5vw;color:${T.muted};margin-top:.3vh">${esc(item.desc)}</div>` : ''}
+            ${item.desc ? `<div style="font-size:1.5vw;color:${T.muted};margin-top:.3vh;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">${esc(item.desc)}</div>` : ''}
           </div>
         </div>`).join('')}
       </div>` : '';

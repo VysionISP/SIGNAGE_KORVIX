@@ -255,6 +255,12 @@ CREATE TABLE IF NOT EXISTS events (
   detail TEXT DEFAULT '',
   created_at TEXT NOT NULL
 );
+
+-- Instance-wide key/value config (licence pricing, etc.)
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
 `;
 
 function open() {
@@ -288,6 +294,12 @@ function migrate() {
   if (!screenCols.includes('alerted')) {
     // 1 while an offline alert is outstanding, so we alert once per outage.
     db.exec('ALTER TABLE screens ADD COLUMN alerted INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!screenCols.includes('license')) {
+    // Billing tier: 'main' (everything: game takeovers, racing/sports
+    // channels) or 'basic' (playlists, menus, widgets — no games/channels).
+    // Existing screens default to main so nothing regresses on upgrade.
+    db.exec("ALTER TABLE screens ADD COLUMN license TEXT NOT NULL DEFAULT 'main'");
   }
   const eventCols = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
   if (!eventCols.includes('actor')) {
@@ -368,8 +380,18 @@ function logEvent(type, { venueId = null, screenId = null, detail = '', actor = 
     venueId, screenId, type, String(detail), actor, now());
 }
 
+function getSetting(key, fallback = null) {
+  const row = get('SELECT value FROM settings WHERE key = ?', key);
+  return row ? row.value : fallback;
+}
+
+function setSetting(key, value) {
+  run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+    key, String(value));
+}
+
 function isEmpty() {
   return !get('SELECT id FROM venues LIMIT 1');
 }
 
-module.exports = { open, get, all, run, id, now, logEvent, isEmpty, DATA_DIR };
+module.exports = { open, get, all, run, id, now, logEvent, getSetting, setSetting, isEmpty, DATA_DIR };

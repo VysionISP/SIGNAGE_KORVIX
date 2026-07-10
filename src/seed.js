@@ -27,18 +27,19 @@ function seedDemo() {
     zones[name] = zoneId;
   }
 
+  // licence: 'main' (games + channels, billed higher) vs 'basic' (ads/menus only)
   const screens = [
-    ['Entrance Portrait', 'Entrance', 'portrait'],
-    ['Bar LED Wall', 'Main Bar', 'landscape'],
-    ['Bistro Menu Board 1', 'Bistro', 'landscape'],
-    ['Bistro Menu Board 2', 'Bistro', 'landscape'],
-    ['Gaming Jackpot Display', 'Gaming Room', 'landscape'],
-    ['Sports Bar Main', 'Sports Bar', 'landscape'],
-    ['Function Room Door Sign', 'Function Room', 'portrait'],
+    ['Entrance Portrait', 'Entrance', 'portrait', 'basic'],
+    ['Bar LED Wall', 'Main Bar', 'landscape', 'main'],
+    ['Bistro Menu Board 1', 'Bistro', 'landscape', 'basic'],
+    ['Bistro Menu Board 2', 'Bistro', 'landscape', 'basic'],
+    ['Gaming Jackpot Display', 'Gaming Room', 'landscape', 'main'],
+    ['Sports Bar Main', 'Sports Bar', 'landscape', 'main'],
+    ['Function Room Door Sign', 'Function Room', 'portrait', 'basic'],
   ];
-  for (const [name, zone, orientation] of screens) {
-    db.run('INSERT INTO screens (id, venue_id, zone_id, name, orientation, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      db.id(), venueId, zones[zone], name, orientation, now);
+  for (const [name, zone, orientation, license] of screens) {
+    db.run('INSERT INTO screens (id, venue_id, zone_id, name, orientation, license, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      db.id(), venueId, zones[zone], name, orientation, license, now);
   }
 
   // TAB corner: dedicated racing channel screens (next 3 races + results).
