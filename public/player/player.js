@@ -194,9 +194,30 @@
     if (playlistChanged || emergencyChanged || itemIndex < 0) {
       itemIndex = -1;
       nextItem();
+    } else {
+      // Rotation continues, but whatever widget is on screen right now gets
+      // its fresh data immediately — menu edits, sold-outs, jackpot ticks
+      // land live instead of waiting for the next pass.
+      refreshLiveWidgets();
     }
-    // otherwise let the current rotation continue; new feed data shows on the
-    // next pass through each widget.
+  }
+
+  // Re-render the currently displayed widget layers in place (main + side).
+  // The rendered HTML is remembered per layer so identical output is a no-op
+  // — no flicker on the 60s background refresh.
+  function refreshLiveWidgets() {
+    const refresh = (layer, item) => {
+      if (!layer || !item || item.type !== 'widget') return;
+      const slide = layer.querySelector('.html-slide');
+      if (!slide) return;
+      const html = renderWidget(item.src);
+      if (layer._widgetHtml !== html) {
+        layer._widgetHtml = html;
+        slide.innerHTML = html;
+      }
+    };
+    refresh(currentLayer, playableItems()[itemIndex]);
+    refresh(sideLayer, sideItems[sideIndex]);
   }
 
   function playableItems() {
@@ -281,9 +302,12 @@
         layer.appendChild(frame);
         break;
       }
-      case 'widget':
-        layer.innerHTML = `<div class="html-slide">${renderWidget(item.src)}</div>`;
+      case 'widget': {
+        const html = renderWidget(item.src);
+        layer._widgetHtml = html;
+        layer.innerHTML = `<div class="html-slide">${html}</div>`;
         break;
+      }
       case 'html':
       default:
         layer.innerHTML = `<div class="html-slide">${item.content || ''}</div>`;
@@ -600,7 +624,9 @@
       wrap.style.cssText = `width:${window.innerWidth}px;height:${window.innerHeight}px;`
         + `transform:scale(${scale});transform-origin:top left;position:absolute;`
         + `top:${Math.max(0, (panel.clientHeight - window.innerHeight * scale) / 2)}px;left:0`;
-      wrap.innerHTML = `<div class="html-slide">${item.type === 'widget' ? renderWidget(item.src) : (item.content || '')}</div>`;
+      const inner = item.type === 'widget' ? renderWidget(item.src) : (item.content || '');
+      if (item.type === 'widget') layer._widgetHtml = inner;
+      wrap.innerHTML = `<div class="html-slide">${inner}</div>`;
       layer.appendChild(wrap);
     }
     return layer;
