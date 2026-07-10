@@ -1416,3 +1416,95 @@ test('menu-board channel screens and tablet sold-out toggles', async (t) => {
     assert.strictEqual(manifest.data.playlist, null); // no schedule set up -> standby
   });
 });
+
+// ---- Billing console: invoices ---------------------------------------------------
+
+test('billing invoices: generate, snapshot, lifecycle, scoping', async (t) => {
+  let orgId, venueId, invoiceId, orgAdminToken;
+
+  await t.test('setup: business with two paired screens (1 main, 1 basic)', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'Invoice Test Group' });
+    orgId = org.data.id;
+    const venue = await api('POST', '/api/venues', { name: 'Invoice Arms', org_id: orgId });
+    venueId = venue.data.id;
+    for (const [name, license] of [['Main TV', 'main'], ['Menu TV', 'basic']]) {
+      const s = await api('POST', `/api/venues/${venueId}/screens`, { name });
+      const hello = await api('POST', '/api/player/hello', {});
+      await api('POST', `/api/screens/${s.data.id}/pair`, { pairing_code: hello.data.pairing_code });
+      await api('PATCH', `/api/screens/${s.data.id}`, { license });
+    }
+    await api('PATCH', '/api/billing/prices', { main: 50, basic: 20 });
+    const user = await api('POST', '/api/users', {
+      email: 'admin@invoicearms.au', password: 'invoice-pass-1', role: 'admin', org_id: orgId,
+    });
+    assert.strictEqual(user.status, 201);
+    orgAdminToken = (await api('POST', '/api/auth/login', { email: 'admin@invoicearms.au', password: 'invoice-pass-1' })).data.token;
+  });
+
+  await t.test('generate drafts once per business per period', async () => {
+    const first = await api('POST', '/api/billing/invoices/generate', { period: '2026-07' });
+    assert.strictEqual(first.status, 200);
+    assert.ok(first.data.created >= 1);
+
+    const again = await api('POST', '/api/billing/invoices/generate', { period: '2026-07' });
+    assert.strictEqual(again.data.created, 0); // idempotent
+
+    const { invoices } = (await api('GET', '/api/billing/invoices')).data;
+    const inv = invoices.find((i) => i.org_name === 'Invoice Test Group' && i.period === '2026-07');
+    assert.ok(inv, 'invoice exists');
+    invoiceId = inv.id;
+    assert.strictEqual(inv.status, 'draft');
+    assert.strictEqual(inv.total, 70); // 1×$50 + 1×$20
+    const line = inv.lines.find((l) => l.venue === 'Invoice Arms');
+    assert.deepStrictEqual(
+      { main: line.main, basic: line.basic, total: line.total },
+      { main: 1, basic: 1, total: 70 });
+  });
+
+  await t.test('issued invoices are snapshots — later price changes leave them alone', async () => {
+    await api('PATCH', '/api/billing/prices', { main: 99, basic: 99 });
+    const inv = (await api('GET', '/api/billing/invoices')).data.invoices.find((i) => i.id === invoiceId);
+    assert.strictEqual(inv.total, 70);
+    await api('PATCH', '/api/billing/prices', { main: 50, basic: 20 }); // restore
+  });
+
+  await t.test('paid lifecycle + printable invoice', async () => {
+    const paid = await api('POST', `/api/billing/invoices/${invoiceId}/paid`, { paid: true });
+    assert.strictEqual(paid.data.status, 'paid');
+    const back = await api('POST', `/api/billing/invoices/${invoiceId}/paid`, { paid: false });
+    assert.strictEqual(back.data.status, 'draft');
+
+    const print = await fetch(`${base}/api/billing/invoices/${invoiceId}/print?token=${adminToken}`);
+    assert.strictEqual(print.status, 200);
+    const html = await print.text();
+    assert.match(html, /Invoice Test Group/);
+    assert.match(html, /\$70/);
+
+    // emailing without SMTP explains itself
+    const send = await api('POST', `/api/billing/invoices/${invoiceId}/send`);
+    assert.strictEqual(send.status, 503);
+  });
+
+  await t.test('org admins see + print their own invoices only, cannot manage them', async () => {
+    const own = await api('GET', '/api/billing/invoices', undefined, orgAdminToken);
+    assert.ok(own.data.invoices.every((i) => i.org_name === 'Invoice Test Group'));
+    assert.ok(own.data.invoices.some((i) => i.id === invoiceId));
+
+    const print = await fetch(`${base}/api/billing/invoices/${invoiceId}/print?token=${orgAdminToken}`);
+    assert.strictEqual(print.status, 200);
+
+    const paidDenied = await api('POST', `/api/billing/invoices/${invoiceId}/paid`, { paid: true }, orgAdminToken);
+    assert.strictEqual(paidDenied.status, 403);
+    const genDenied = await api('POST', '/api/billing/invoices/generate', { period: '2026-08' }, orgAdminToken);
+    assert.strictEqual(genDenied.status, 403);
+    const delDenied = await api('DELETE', `/api/billing/invoices/${invoiceId}`, undefined, orgAdminToken);
+    assert.strictEqual(delDenied.status, 403);
+  });
+
+  await t.test('delete + regenerate', async () => {
+    const del = await api('DELETE', `/api/billing/invoices/${invoiceId}`);
+    assert.strictEqual(del.status, 200);
+    const regen = await api('POST', '/api/billing/invoices/generate', { period: '2026-07' });
+    assert.ok(regen.data.created >= 1);
+  });
+});

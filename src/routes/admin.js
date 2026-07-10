@@ -778,6 +778,163 @@ route('PATCH', '/api/billing/prices', async (req, res) => {
   sendJson(res, 200, { prices });
 });
 
+// ---- invoices ---------------------------------------------------------------
+
+// Snapshot one business's current billable screens into invoice lines.
+function invoiceLines(orgId, prices) {
+  const lines = [];
+  for (const v of db.all('SELECT * FROM venues WHERE org_id = ? ORDER BY name', orgId)) {
+    const paired = db.all('SELECT license FROM screens WHERE venue_id = ? AND device_key IS NOT NULL', v.id);
+    const main = paired.filter((s) => (s.license || 'main') === 'main').length;
+    const basic = paired.length - main;
+    if (!main && !basic) continue;
+    lines.push({
+      venue: v.name, main, basic,
+      main_price: prices.main, basic_price: prices.basic,
+      total: main * prices.main + basic * prices.basic,
+    });
+  }
+  return lines;
+}
+
+// Create any missing invoices for a period (YYYY-MM). Idempotent — the
+// (org, period) UNIQUE constraint means each business is invoiced once a
+// month no matter how often this runs. Called monthly by the monitor and
+// on demand from the billing panel.
+function generateInvoices(period, actor = 'system') {
+  const prices = licensePrices();
+  const created = [];
+  for (const org of db.all('SELECT * FROM orgs')) {
+    if (db.get('SELECT id FROM invoices WHERE org_id = ? AND period = ?', org.id, period)) continue;
+    const lines = invoiceLines(org.id, prices);
+    if (!lines.length) continue; // nothing billable — no invoice
+    const total = lines.reduce((n, l) => n + l.total, 0);
+    const invoiceId = db.id();
+    db.run('INSERT INTO invoices (id, org_id, period, lines, total, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      invoiceId, org.id, period, JSON.stringify(lines), total, db.now());
+    db.logEvent('billing.invoice', { detail: `${org.name} ${period}: $${total}`, actor });
+    created.push(invoiceId);
+  }
+  return created;
+}
+
+function invoiceView(inv) {
+  let lines; try { lines = JSON.parse(inv.lines); } catch { lines = []; }
+  const org = db.get('SELECT name, alert_email FROM orgs WHERE id = ?', inv.org_id);
+  return { ...inv, lines, org_name: org?.name || '(deleted business)', org_email: org?.alert_email || null };
+}
+
+function ownedInvoice(req, id) {
+  const inv = db.get('SELECT * FROM invoices WHERE id = ?', id);
+  if (!inv) throw new HttpError(404, 'invoice not found');
+  if (req.user.role !== 'superadmin' && req.user.org_id !== inv.org_id) throw new HttpError(404, 'invoice not found');
+  return inv;
+}
+
+route('GET', '/api/billing/invoices', (req, res) => {
+  auth.requireRole(req.user, 'admin');
+  const rows = req.user.role === 'superadmin'
+    ? db.all('SELECT * FROM invoices ORDER BY period DESC, created_at DESC LIMIT 200')
+    : db.all('SELECT * FROM invoices WHERE org_id = ? ORDER BY period DESC LIMIT 60', req.user.org_id ?? '');
+  sendJson(res, 200, { invoices: rows.map(invoiceView) });
+});
+
+route('POST', '/api/billing/invoices/generate', async (req, res) => {
+  auth.requireRole(req.user, 'superadmin');
+  const body = await readJson(req);
+  const period = /^\d{4}-\d{2}$/.test(body.period || '') ? body.period : new Date().toISOString().slice(0, 7);
+  const created = generateInvoices(period, actorOf(req));
+  sendJson(res, 200, { period, created: created.length });
+});
+
+route('POST', '/api/billing/invoices/:id/paid', async (req, res, params) => {
+  auth.requireRole(req.user, 'superadmin');
+  const inv = ownedInvoice(req, params.id);
+  const body = await readJson(req);
+  const paid = body.paid !== false;
+  db.run('UPDATE invoices SET status = ?, paid_at = ? WHERE id = ?',
+    paid ? 'paid' : (inv.sent_at ? 'sent' : 'draft'), paid ? db.now() : null, inv.id);
+  if (paid) db.logEvent('billing.paid', { detail: `${invoiceView(inv).org_name} ${inv.period}: $${inv.total}`, actor: actorOf(req) });
+  sendJson(res, 200, invoiceView(db.get('SELECT * FROM invoices WHERE id = ?', inv.id)));
+});
+
+route('DELETE', '/api/billing/invoices/:id', (req, res, params) => {
+  auth.requireRole(req.user, 'superadmin');
+  const inv = ownedInvoice(req, params.id);
+  db.run('DELETE FROM invoices WHERE id = ?', inv.id);
+  sendJson(res, 200, { ok: true });
+});
+
+// Email the invoice to the business's billing address (needs SMTP + an
+// alert email set on the Businesses tab).
+route('POST', '/api/billing/invoices/:id/send', async (req, res, params) => {
+  auth.requireRole(req.user, 'superadmin');
+  const mailer = require('../mailer');
+  const inv = invoiceView(ownedInvoice(req, params.id));
+  if (!mailer.configured()) throw new HttpError(503, 'email is not set up on this server yet (SMTP_HOST/MAIL_FROM)');
+  if (!inv.org_email) throw new HttpError(400, 'this business has no billing email — set one on the Businesses tab');
+  const money = (n) => '$' + Number(n).toFixed(2).replace(/\.00$/, '');
+  const rows = inv.lines.map((l) => `<tr>
+      <td style="padding:6px 10px 6px 0">${l.venue}</td>
+      <td style="padding:6px 10px;text-align:right">${l.main} × ${money(l.main_price)}</td>
+      <td style="padding:6px 10px;text-align:right">${l.basic} × ${money(l.basic_price)}</td>
+      <td style="padding:6px 0 6px 10px;text-align:right;font-weight:700">${money(l.total)}</td>
+    </tr>`).join('');
+  const result = await mailer.sendMail({
+    to: inv.org_email,
+    subject: `${mailer.BRAND} — screen licences for ${inv.period} (${money(inv.total)})`,
+    html: mailer.template(`Invoice — ${inv.period}`,
+      `<p>Screen licences for <b>${inv.org_name}</b>, period <b>${inv.period}</b>.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <tr style="opacity:.7"><td></td><td style="text-align:right">Main</td><td style="text-align:right">Basic</td><td style="text-align:right">Total</td></tr>
+        ${rows}
+        <tr><td colspan="3" style="padding-top:10px;font-weight:700">Total due</td>
+        <td style="padding-top:10px;text-align:right;font-weight:800;font-size:16px">${money(inv.total)}</td></tr>
+      </table>`),
+  });
+  if (result.ok === false) throw new HttpError(502, 'email failed to send: ' + result.error);
+  db.run("UPDATE invoices SET status = CASE WHEN status = 'paid' THEN 'paid' ELSE 'sent' END, sent_at = ? WHERE id = ?", db.now(), inv.id);
+  db.logEvent('billing.sent', { detail: `${inv.org_name} ${inv.period} -> ${inv.org_email}`, actor: actorOf(req) });
+  sendJson(res, 200, invoiceView(db.get('SELECT * FROM invoices WHERE id = ?', inv.id)));
+});
+
+// Printable invoice (superadmin or the owning business admin). Plain HTML so
+// the browser's print-to-PDF does the rest; ?token= keeps it a normal link.
+route('GET', '/api/billing/invoices/:id/print', (req, res, params) => {
+  auth.requireRole(req.user, 'admin');
+  const inv = invoiceView(ownedInvoice(req, params.id));
+  const BRAND = require('../mailer').BRAND;
+  const money = (n) => '$' + Number(n).toFixed(2).replace(/\.00$/, '');
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${esc(inv.period)} — ${esc(inv.org_name)}</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;color:#111;padding:0 20px}
+  table{width:100%;border-collapse:collapse;margin-top:24px}
+  td,th{padding:10px 8px;border-bottom:1px solid #ddd;text-align:left}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#666}
+  .num{text-align:right}.total td{border-bottom:none;font-weight:800;font-size:18px;padding-top:18px}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;
+    background:${inv.status === 'paid' ? '#dcfce7;color:#166534' : inv.status === 'sent' ? '#dbeafe;color:#1e40af' : '#f3f4f6;color:#374151'}}
+  @media print{.noprint{display:none}}</style></head><body>
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <h1 style="letter-spacing:.06em">${esc(BRAND.toUpperCase())}</h1>
+    <span class="badge">${esc(inv.status.toUpperCase())}</span>
+  </div>
+  <p><b>Tax invoice</b> — screen licences<br>
+  Billed to: <b>${esc(inv.org_name)}</b><br>
+  Period: <b>${esc(inv.period)}</b> · Issued: ${new Date(inv.created_at).toLocaleDateString('en-AU')}</p>
+  <table><tr><th>Venue</th><th class="num">Main screens</th><th class="num">Basic screens</th><th class="num">Amount</th></tr>
+  ${inv.lines.map((l) => `<tr><td>${esc(l.venue)}</td>
+    <td class="num">${l.main} × ${money(l.main_price)}</td>
+    <td class="num">${l.basic} × ${money(l.basic_price)}</td>
+    <td class="num">${money(l.total)}</td></tr>`).join('')}
+  <tr class="total"><td colspan="3">Total due</td><td class="num">${money(inv.total)}</td></tr></table>
+  <p style="color:#666;font-size:13px;margin-top:32px">Generated by ${esc(BRAND)}.</p>
+  <button class="noprint" onclick="print()" style="padding:10px 22px;font-size:15px">Print / save as PDF</button>
+  </body></html>`);
+});
+
+
 // ---- Fleet health & events ---------------------------------------------------
 
 route('GET', '/api/health/overview', (req, res) => {
@@ -869,4 +1026,4 @@ route('GET', '/api/backup', (req, res) => {
   stream.pipe(res);
 });
 
-module.exports = { routes, nudgeVenue, nudgeAll, screenStatus, OFFLINE_AFTER_MS };
+module.exports = { routes, nudgeVenue, nudgeAll, screenStatus, OFFLINE_AFTER_MS, generateInvoices };

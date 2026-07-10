@@ -261,6 +261,22 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT ''
 );
+
+-- Monthly licence invoices, one per business per period. Line items are a
+-- snapshot (venue breakdown + prices at generation time) so later price or
+-- screen changes never rewrite an issued invoice.
+CREATE TABLE IF NOT EXISTS invoices (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  period TEXT NOT NULL,               -- YYYY-MM
+  lines TEXT NOT NULL DEFAULT '[]',   -- [{venue, main, basic, main_price, basic_price, total}]
+  total REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'draft', -- draft | sent | paid
+  created_at TEXT NOT NULL,
+  sent_at TEXT,
+  paid_at TEXT,
+  UNIQUE (org_id, period)
+);
 `;
 
 function open() {

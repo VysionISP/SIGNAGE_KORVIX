@@ -191,6 +191,18 @@ function cleanupResets() {
   db.run('DELETE FROM password_resets WHERE expires_at < ?', db.now());
 }
 
+// On the 1st of each month, draft this month's licence invoices. Idempotent
+// (one per business per period), so re-runs and manual generation coexist.
+function monthlyInvoices() {
+  if (new Date().getDate() !== 1) return;
+  try {
+    const created = require('./routes/admin').generateInvoices(new Date().toISOString().slice(0, 7));
+    if (created.length) console.log(`[korvix] drafted ${created.length} licence invoice(s) for the new month`);
+  } catch (err) {
+    console.error('[korvix] monthly invoicing failed:', err.message);
+  }
+}
+
 function start() {
   // .unref() so timers never hold the process open (tests, shutdown).
   setInterval(() => {
@@ -205,6 +217,8 @@ function start() {
   // One backup per calendar day; runBackup() no-ops if today's already exists.
   setInterval(runBackup, 60 * 60 * 1000).unref();
   setTimeout(runBackup, 15000).unref();
+  setInterval(monthlyInvoices, 60 * 60 * 1000).unref();
+  setTimeout(monthlyInvoices, 20000).unref();
   if (!ALERT_WEBHOOK) {
     console.log('[korvix] tip: set KORVIX_ALERT_WEBHOOK to get screen offline/recovery alerts (Slack/Teams/any JSON webhook)');
   }

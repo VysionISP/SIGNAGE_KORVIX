@@ -312,10 +312,15 @@ Screens tab:
   Game takeovers and premium channels never reach a basic screen (emergency
   broadcasts always do — safety is not a billing tier).
 
-The **Billing** tab (Settings → Billing) is the invoicing dashboard: the
-superadmin sets the two per-screen prices, sees every business's monthly bill
-broken down by venue, and exports a CSV for invoicing. Business admins see
-their own bill at the same place. Unpaired placeholder screens cost nothing.
+The **billing console** at `/billing/` is the superadmin's money platform —
+nothing but billing: per-screen prices, live usage by business and venue,
+monthly revenue / outstanding / collected KPIs, and the invoice book. Invoices
+draft themselves on the 1st of each month (or on demand for any period), are
+snapshots (later price/screen changes never rewrite an issued invoice), can be
+emailed to the business's billing address once SMTP is configured, marked
+paid, and printed to PDF. Business admins see their own bill and invoice
+history on the dashboard's Settings → Billing tab. Unpaired placeholder
+screens cost nothing.
 
 ### Backups
 

@@ -1953,84 +1953,52 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
   // ---- licensing & billing ----------------------------------------------------------------
 
   async function renderBilling() {
-    const bill = await api('GET', '/api/billing');
-    const $$ = (n) => '$' + Number(n).toLocaleString('en-AU', { maximumFractionDigits: 2 });
-    const isSuper = hasRole('superadmin');
+    // The full billing platform lives on its own page; the dashboard tab is
+    // just the customer-facing "here's your bill" view for business admins.
+    if (hasRole('superadmin')) { location.href = '/billing/'; return; }
 
-    const bizRows = bill.businesses.map((b) => `
-      <tr style="font-weight:700">
-        <td>${esc(b.name)}</td>
-        <td>${b.main}</td><td>${b.basic}</td>
-        <td class="muted">${b.unpaired || ''}</td>
-        <td style="text-align:right;font-variant-numeric:tabular-nums">${$$(b.monthly)}</td>
-      </tr>
-      ${b.venues.map((v) => `
-      <tr>
-        <td class="muted" style="padding-left:26px">↳ ${esc(v.name)}</td>
-        <td class="muted">${v.main}</td><td class="muted">${v.basic}</td>
-        <td class="muted">${v.unpaired || ''}</td>
-        <td class="muted" style="text-align:right;font-variant-numeric:tabular-nums">${$$(v.monthly)}</td>
-      </tr>`).join('')}`).join('');
+    const [bill, { invoices }] = await Promise.all([
+      api('GET', '/api/billing'),
+      api('GET', '/api/billing/invoices'),
+    ]);
+    const $$ = (n) => '$' + Number(n).toLocaleString('en-AU', { maximumFractionDigits: 2 });
+    const biz = bill.businesses[0];
 
     $('#tab-billing').innerHTML = `
       <h2>Billing</h2>
-      <p class="muted">Every <b>paired</b> screen is licensed monthly: <b>Main</b> screens include the games
-      (draws, CashKing, wheel, badge draw) and dedicated racing/sports channels; <b>Basic</b> screens play
-      advertising, menus, playlists and widgets only. Set each screen's licence on the Screens tab —
-      unpaired placeholder screens aren't billed.</p>
+      <p class="muted">Each <b>paired</b> screen carries a monthly licence: <b>Main</b> screens include the games and
+      racing/sports channels (${$$(bill.prices.main)}/month), <b>Basic</b> screens play advertising, menus and playlists
+      (${$$(bill.prices.basic)}/month). Unpaired screens are free.</p>
 
-      ${isSuper ? `
-      <div class="card">
-        <div class="row">
-          <label class="muted">Main screen $<input id="bl-main" type="number" min="0" step="1" value="${bill.prices.main}" style="width:90px"> /screen/month</label>
-          <label class="muted">Basic screen $<input id="bl-basic" type="number" min="0" step="1" value="${bill.prices.basic}" style="width:90px"> /screen/month</label>
-          <button class="btn small" id="bl-save">Save prices</button>
-          <div class="spacer"></div>
-          <button class="btn small secondary" id="bl-csv">⬇ Export CSV for invoicing</button>
-        </div>
-      </div>` : `
-      <div class="card"><div class="row">
-        <div class="muted">Main screen: <b>${$$(bill.prices.main)}</b>/month · Basic screen: <b>${$$(bill.prices.basic)}</b>/month</div>
-      </div></div>`}
-
-      <div class="cards" style="margin-top:14px">
+      <div class="cards">
         <div class="card" style="margin:0"><h3 style="margin:0" class="muted">Main screens</h3>
-          <div class="stat">${bill.businesses.reduce((n, b) => n + b.main, 0)}</div></div>
+          <div class="stat">${biz ? biz.main : 0}</div></div>
         <div class="card" style="margin:0"><h3 style="margin:0" class="muted">Basic screens</h3>
-          <div class="stat">${bill.businesses.reduce((n, b) => n + b.basic, 0)}</div></div>
-        <div class="card" style="margin:0"><h3 style="margin:0" class="muted">Monthly ${isSuper ? 'revenue' : 'total'}</h3>
-          <div class="stat" style="color:var(--accent)">${$$(bill.total_monthly)}</div></div>
+          <div class="stat">${biz ? biz.basic : 0}</div></div>
+        <div class="card" style="margin:0"><h3 style="margin:0" class="muted">Current monthly total</h3>
+          <div class="stat" style="color:var(--accent)">${$$(biz ? biz.monthly : 0)}</div></div>
       </div>
 
-      <table style="margin-top:14px">
-        <thead><tr><th>${isSuper ? 'Business / venue' : 'Venue'}</th><th>Main</th><th>Basic</th><th>Unpaired (free)</th><th style="text-align:right">Per month</th></tr></thead>
-        <tbody>${bizRows || '<tr><td class="muted" colspan="5">No businesses yet</td></tr>'}</tbody>
-      </table>`;
+      ${biz ? `<table style="margin-top:14px">
+        <thead><tr><th>Venue</th><th>Main</th><th>Basic</th><th style="text-align:right">Per month</th></tr></thead>
+        <tbody>${biz.venues.map((v) => `
+          <tr><td>${esc(v.name)}</td><td>${v.main}</td><td>${v.basic}</td>
+          <td style="text-align:right">${$$(v.monthly)}</td></tr>`).join('')}</tbody>
+      </table>` : ''}
 
-    const save = $('#bl-save');
-    if (save) save.onclick = async () => {
-      await api('PATCH', '/api/billing/prices', {
-        main: parseFloat($('#bl-main').value),
-        basic: parseFloat($('#bl-basic').value),
-      });
-      render();
-    };
-    const csv = $('#bl-csv');
-    if (csv) csv.onclick = () => {
-      const lines = [['business', 'venue', 'main_screens', 'basic_screens', 'main_price', 'basic_price', 'monthly_total'].join(',')];
-      for (const b of bill.businesses) {
-        for (const v of b.venues) {
-          lines.push([JSON.stringify(b.name), JSON.stringify(v.name), v.main, v.basic, bill.prices.main, bill.prices.basic, v.monthly].join(','));
-        }
-        lines.push([JSON.stringify(b.name), '"— total —"', b.main, b.basic, bill.prices.main, bill.prices.basic, b.monthly].join(','));
-      }
-      const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `billing-${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    };
+      <h2>Invoices</h2>
+      <table>
+        <thead><tr><th>Period</th><th style="text-align:right">Total</th><th>Status</th><th></th></tr></thead>
+        <tbody>${invoices.map((i) => `
+          <tr>
+            <td>${esc(i.period)}</td>
+            <td style="text-align:right;font-weight:700">${$$(i.total)}</td>
+            <td><span class="pill ${i.status === 'paid' ? 'online' : i.status === 'sent' ? 'unpaired' : 'never-connected'}">${esc(i.status)}</span></td>
+            <td style="text-align:right"><a class="btn small secondary" style="text-decoration:none" target="_blank"
+              href="/api/billing/invoices/${i.id}/print?token=${encodeURIComponent(sessionToken() || '')}">View / print</a></td>
+          </tr>`).join('') || '<tr><td class="muted" colspan="4">No invoices yet.</td></tr>'}
+        </tbody>
+      </table>`;
   }
 
   // ---- boot -------------------------------------------------------------------------------

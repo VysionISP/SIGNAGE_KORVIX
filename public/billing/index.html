@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Billing Console</title>
+<style>
+  :root {
+    --bg: #07090f; --panel: #10141d; --panel2: #171d29; --line: #232b3a;
+    --text: #e7edf7; --muted: #8fa1bd; --accent: #38bdf8; --good: #4ade80;
+    --warn: #fbbf24; --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 14px 26px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header .logo { font-weight: 800; letter-spacing: .12em; font-size: 15px; }
+  header .logo span { color: var(--accent); }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .spacer { flex: 1; }
+  main { max-width: 1160px; margin: 0 auto; padding: 26px 26px 80px; }
+  h2 { font-size: 15px; letter-spacing: .04em; margin: 34px 0 12px; }
+  .muted { color: var(--muted); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .kpi .label { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .kpi .value { font-size: 27px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  input, select, button { font: inherit; color: inherit; }
+  input, select {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  }
+  button.btn {
+    background: var(--accent); color: #04202e; font-weight: 700; border: none;
+    border-radius: 8px; padding: 9px 16px; cursor: pointer;
+  }
+  button.btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  button.btn.small { padding: 5px 10px; font-size: 12.5px; }
+  button.btn.danger { background: transparent; color: var(--bad); border: 1px solid #7f1d1d; }
+  a { color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--panel2); }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; }
+  .badge.draft { background: #1f2937; color: #9ca3af; }
+  .badge.sent { background: #172554; color: #93c5fd; }
+  .badge.paid { background: #052e16; color: #4ade80; }
+  .chip { padding: 5px 13px; border-radius: 18px; border: 1px solid var(--line); background: var(--panel2); cursor: pointer; font-size: 13px; }
+  .chip.on { background: var(--accent); color: #04202e; border-color: var(--accent); font-weight: 700; }
+  .venue-row td { color: var(--muted); font-size: 13px; }
+  #overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 50; }
+</style>
+</head>
+<body>
+<div id="overlay"><div class="muted">Loading billing console…</div></div>
+<header>
+  <div class="logo" id="brand">BILLING</div>
+  <div class="sub">Billing console</div>
+  <div class="spacer"></div>
+  <span class="muted" id="who"></span>
+  <a href="/admin/" style="text-decoration:none">← Signage dashboard</a>
+</header>
+<main>
+  <div class="kpis" id="kpis"></div>
+
+  <h2>Licence pricing</h2>
+  <div class="card">
+    <div class="row">
+      <label class="muted">Main screen (games + channels) $<input id="pr-main" type="number" min="0" step="1" style="width:90px"> /month</label>
+      <label class="muted">Basic screen (ads only) $<input id="pr-basic" type="number" min="0" step="1" style="width:90px"> /month</label>
+      <button class="btn small" id="pr-save">Save prices</button>
+      <span class="muted" id="pr-note"></span>
+    </div>
+  </div>
+
+  <h2 style="display:flex;align-items:center;gap:14px">Invoices
+    <span style="flex:1"></span>
+    <span class="row" style="font-weight:400">
+      <input type="month" id="inv-period">
+      <button class="btn small" id="inv-generate">Generate invoices</button>
+    </span>
+  </h2>
+  <div class="row" id="inv-filters" style="margin-bottom:10px">
+    <button class="chip on" data-filter="all">All</button>
+    <button class="chip" data-filter="draft">Draft</button>
+    <button class="chip" data-filter="sent">Sent</button>
+    <button class="chip" data-filter="paid">Paid</button>
+  </div>
+  <table id="inv-table"></table>
+
+  <h2 style="display:flex;align-items:center;gap:14px">Current usage
+    <span style="flex:1"></span>
+    <button class="btn small secondary" id="usage-csv" style="font-weight:400">⬇ Usage CSV</button>
+  </h2>
+  <table id="usage-table"></table>
+</main>
+<script src="billing.js"></script>
+</body>
+</html>
