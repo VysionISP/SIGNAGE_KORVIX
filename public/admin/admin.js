@@ -152,7 +152,7 @@
     { tab: 'emergency', label: 'Emergency' },
     {
       label: 'Settings',
-      tabs: [['integrations', 'Integrations'], ['reports', 'Reports'],
+      tabs: [['venue', 'Venue', 'admin'], ['integrations', 'Integrations'], ['reports', 'Reports'],
         ['users', 'Users', 'admin'], ['orgs', 'Businesses', 'superadmin']],
     },
   ];
@@ -220,6 +220,7 @@
       playlists: renderPlaylists, schedules: renderSchedules, draws: renderDraws,
       emergency: renderEmergency, integrations: renderIntegrations, reports: renderReports,
       users: renderUsers, orgs: renderOrgs, cashking: renderCashKing, tablet: renderTablet,
+      venue: renderVenueSettings,
     };
     await renderers[activeTab]();
     await renderBanner();
@@ -1208,6 +1209,56 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
     };
   }
 
+  // ---- venue settings ---------------------------------------------------------------------
+
+  async function renderVenueSettings() {
+    const v = venue();
+    $('#tab-venue').innerHTML = `
+      <h2>Venue settings — ${esc(v.name)}</h2>
+      <div class="card">
+        <div class="form-grid">
+          <label>Venue name<input id="vs-name" value="${esc(v.name)}"></label>
+          <label>Timezone<input id="vs-tz" value="${esc(v.timezone)}" list="tz-list">
+            <datalist id="tz-list">
+              ${['Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Adelaide',
+                 'Australia/Perth', 'Australia/Hobart', 'Australia/Darwin'].map((t) => `<option>${t}</option>`).join('')}
+            </datalist></label>
+          <label>Address<input id="vs-addr" value="${esc(v.address || '')}"></label>
+          <button class="btn" id="vs-save">Save</button>
+        </div>
+        <p class="muted" style="margin-bottom:0">Timezone drives all schedule dayparting for this venue.
+        Weather location and the racing feed live under Settings → Integrations.</p>
+      </div>
+
+      <h2 style="color:var(--bad)">Danger zone</h2>
+      <div class="card">
+        <div class="row">
+          <div class="muted">Deleting a venue removes its screens, media, playlists, schedules and games permanently.</div>
+          <div class="spacer"></div>
+          <button class="btn danger" id="vs-delete">Delete this venue</button>
+        </div>
+      </div>`;
+
+    $('#vs-save').onclick = async () => {
+      const name = $('#vs-name').value.trim();
+      if (!name) return alert('Venue name required');
+      await api('PATCH', `/api/venues/${venueId}`, {
+        name, timezone: $('#vs-tz').value.trim() || 'Australia/Sydney', address: $('#vs-addr').value.trim(),
+      });
+      await refresh();
+      alert('Saved.');
+    };
+    $('#vs-delete').onclick = async () => {
+      const typed = prompt(`This permanently deletes "${v.name}" and everything in it.\nType the venue name to confirm:`);
+      if (typed !== v.name) { if (typed !== null) alert('Name did not match — nothing deleted.'); return; }
+      await api('DELETE', `/api/venues/${venueId}`);
+      localStorage.removeItem('korvix.venue');
+      venueId = null;
+      goTab('overview');
+      await refresh();
+    };
+  }
+
   // ---- proof-of-play reports -------------------------------------------------------------
 
   let reportRange = null;
@@ -1357,10 +1408,11 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
 
   async function renderOrgs() {
     const { orgs } = await api('GET', '/api/orgs');
+    const allVenues = (await api('GET', '/api/venues')).venues; // superadmin: every tenant
     $('#tab-orgs').innerHTML = `
       <h2>Businesses</h2>
       <p class="muted">Each business owns its venues, users and media library — tenants never see each other.
-      Create the business, then add their admin login in the Users tab.</p>
+      Create the business, assign its venues below, then add their admin login in the Users tab.</p>
       <div class="row" style="margin-bottom:14px">
         <input id="org-name" placeholder="New business name — e.g. Harbourside Hotels Group" style="min-width:280px">
         <button class="btn" id="org-add">Create business</button>
@@ -1379,7 +1431,34 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
             </td>
           </tr>`).join('') || '<tr><td class="muted" colspan="5">No businesses yet</td></tr>'}
         </tbody>
+      </table>
+
+      <h2>Which business owns each venue</h2>
+      <p class="muted">A user sees every venue in their business — so give each owner their own business and
+      move their pubs into it here. Moving a venue moves its screens, media and games with it.</p>
+      <table>
+        <thead><tr><th>Venue</th><th>Business</th></tr></thead>
+        <tbody>${allVenues.map((v) => `
+          <tr>
+            <td>${esc(v.name)} <span class="muted">· ${v.screens.length} screen${v.screens.length === 1 ? '' : 's'}</span></td>
+            <td><select data-vorg="${v.id}" data-cur="${esc(v.org_id || '')}">
+              ${orgs.map((o) => `<option value="${o.id}" ${o.id === v.org_id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
+            </select></td>
+          </tr>`).join('') || '<tr><td class="muted" colspan="2">No venues yet</td></tr>'}
+        </tbody>
       </table>`;
+
+    $('#tab-orgs').onchange = async (e) => {
+      const sel = e.target.closest('[data-vorg]');
+      if (!sel) return;
+      const orgName = orgs.find((o) => o.id === sel.value)?.name || '?';
+      if (!confirm(`Move this venue to "${orgName}"? Users of the old business lose access to it immediately.`)) {
+        sel.value = sel.dataset.cur;
+        return;
+      }
+      await api('PATCH', `/api/venues/${sel.dataset.vorg}`, { org_id: sel.value });
+      await refresh();
+    };
 
     $('#org-add').onclick = async () => {
       const name = $('#org-name').value.trim();
