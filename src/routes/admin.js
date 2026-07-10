@@ -262,7 +262,11 @@ route('PATCH', '/api/screens/:id', async (req, res, params) => {
     if (!ROTATIONS.has(rotation)) throw new HttpError(400, 'rotation must be 0, 90, 180 or 270');
   }
   if (body.channel !== undefined && !SCREEN_CHANNELS.has(body.channel)) {
-    throw new HttpError(400, `channel must be one of: ${[...SCREEN_CHANNELS].join(', ')}`);
+    // 'menu:<id>' pins the screen to one of this venue's menu boards.
+    const menuId = String(body.channel).startsWith('menu:') ? String(body.channel).slice(5) : null;
+    if (!menuId || !db.get('SELECT id FROM menus WHERE id = ? AND venue_id = ?', menuId, screen.venue_id)) {
+      throw new HttpError(400, `channel must be menu:<menu id> or one of: ${[...SCREEN_CHANNELS].join(', ')}`);
+    }
   }
   if (body.layout !== undefined && !LAYOUTS.has(body.layout)) {
     throw new HttpError(400, `layout must be one of: ${[...LAYOUTS].join(', ')}`);
@@ -279,7 +283,8 @@ route('PATCH', '/api/screens/:id', async (req, res, params) => {
     license = body.license;
   }
   let channel = body.channel ?? screen.channel ?? 'main';
-  if (license === 'basic' && channel !== 'main') {
+  // Menu-board channels are ordinary content — fine on a basic licence.
+  if (license === 'basic' && channel !== 'main' && !String(channel).startsWith('menu:')) {
     if (body.channel !== undefined && body.license === undefined) {
       throw new HttpError(400, 'racing/sports channels need a Main licence — upgrade this screen first');
     }

@@ -45,6 +45,10 @@ route('GET', '/api/remote/:token', (req, res, params) => {
     venue: { id: venue.id, name: venue.name },
     zones: db.all('SELECT id, name FROM zones WHERE venue_id = ? ORDER BY name', venue.id),
     playlists: db.all('SELECT id, name FROM playlists WHERE venue_id = ? ORDER BY name', venue.id),
+    menus: db.all('SELECT * FROM menus WHERE venue_id = ? ORDER BY name', venue.id).map((m) => {
+      let sections; try { sections = JSON.parse(m.sections); } catch { sections = []; }
+      return { id: m.id, name: m.name, sections };
+    }),
     draws: draws.map(drawView),
     card_game: game ? cashking.boardView(game) : null,
     wheel: (() => { const w = games.currentWheel(venue.id); return w ? games.wheelView(w) : null; })(),
@@ -265,6 +269,33 @@ route('POST', '/api/remote/:token/card-games/:id/pick', async (req, res, params)
   cashking.fireWebhook(updated, venue.name, wasJoker ? 'won' : 'miss');
   nudgeVenue(venue.id);
   sendJson(res, 200, { ...cashking.boardView(updated), was_joker: wasJoker });
+});
+
+// ---- Menus from the tablet --------------------------------------------------------
+//
+// Kitchen runs out of the parma? Staff flip it to sold out right on the
+// tablet and every board in the venue updates within a second. Toggle-only:
+// menu text/prices stay dashboard-managed.
+
+route('POST', '/api/remote/:token/menus/:id/sold-out', async (req, res, params) => {
+  const venue = venueForToken(params.token);
+  const menu = db.get('SELECT * FROM menus WHERE id = ? AND venue_id = ?', params.id, venue.id);
+  if (!menu) throw new HttpError(404, 'menu not found');
+  const body = await readJson(req);
+  const si = parseInt(body.section, 10);
+  const ii = parseInt(body.item, 10);
+  let sections;
+  try { sections = JSON.parse(menu.sections); } catch { sections = []; }
+  const item = sections?.[si]?.items?.[ii];
+  if (!item) throw new HttpError(400, 'unknown menu item');
+  item.sold_out = !!body.sold_out;
+  db.run('UPDATE menus SET sections = ?, updated_at = ? WHERE id = ?',
+    JSON.stringify(sections), db.now(), menu.id);
+  logEvent(item.sold_out ? 'menu.sold_out' : 'menu.back_on', {
+    venueId: venue.id, detail: `${menu.name}: ${item.name}`,
+  });
+  nudgeVenue(venue.id);
+  sendJson(res, 200, { ok: true, item: { name: item.name, sold_out: item.sold_out } });
 });
 
 // ---- Photo to screen ------------------------------------------------------------

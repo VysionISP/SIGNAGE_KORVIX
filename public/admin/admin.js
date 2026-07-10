@@ -349,11 +349,12 @@
   // ---- screens ------------------------------------------------------------------
 
   async function renderScreens() {
-    const [{ screens }, { pairings }, { playlists }, { feeds }] = await Promise.all([
+    const [{ screens }, { pairings }, { playlists }, { feeds }, { menus }] = await Promise.all([
       api('GET', `/api/venues/${venueId}/screens`),
       api('GET', '/api/pairings'),
       api('GET', `/api/venues/${venueId}/playlists`),
       api('GET', `/api/integrations/${venueId}`),
+      api('GET', `/api/venues/${venueId}/menus`),
     ]);
     const zones = venue().zones || [];
     const tickerMessages = (feeds.find((f) => f.source === 'ticker')?.payload?.messages) || [];
@@ -372,10 +373,14 @@
               <option value="main" ${(s.license || 'main') === 'main' ? 'selected' : ''}>Main — full</option>
               <option value="basic" ${s.license === 'basic' ? 'selected' : ''}>Basic — ads only</option>
             </select></td>
-            <td><select data-channel="${s.id}" ${s.license === 'basic' ? 'disabled title="Racing/sports channels need a Main licence"' : ''}>
+            <td><select data-channel="${s.id}">
               ${[['main', 'Main (playlists)'], ['racing1', 'Racing — Next To Go'], ['racing2', 'Racing — 2nd race'],
                  ['racing3', 'Racing — 3rd race'], ['racing-results', 'Racing — Results'], ['sports', 'Sports']]
-                .map(([v, label]) => `<option value="${v}" ${(s.channel || 'main') === v ? 'selected' : ''}>${label}</option>`).join('')}
+                .map(([v, label]) => `<option value="${v}" ${(s.channel || 'main') === v ? 'selected' : ''}
+                  ${s.license === 'basic' && v !== 'main' ? 'disabled' : ''}>${label}${s.license === 'basic' && v !== 'main' ? ' — needs Main licence' : ''}</option>`).join('')}
+              ${menus.length ? `<optgroup label="Menu boards (any licence)">
+                ${menus.map((m) => `<option value="menu:${m.id}" ${s.channel === `menu:${m.id}` ? 'selected' : ''}>Menu — ${esc(m.name)}</option>`).join('')}
+              </optgroup>` : ''}
             </select></td>
             <td>
               <select data-layout="${s.id}">

@@ -91,6 +91,7 @@
     const views = {
       home: homeHtml, cashking: cashkingHtml, draws: drawsHtml,
       wheel: wheelHtml, badge: badgeHtml, emergency: emergencyHtml, photo: photoHtml,
+      menus: menusHtml,
     };
     $('views').innerHTML = (views[view] || homeHtml)();
     freshNumbers.clear();
@@ -144,6 +145,15 @@
         <span><span class="t-title">Badge Draw</span><br><span class="t-sub">${state.badge_draw
           ? `${moneyAud(state.badge_draw.prize)} pot · ${state.badge_draw.members_count.toLocaleString()} members${state.badge_draw.live ? ' · LIVE' : ''}`
           : 'Tap to set up the members draw'}</span></span>
+        <span class="t-go">›</span>
+      </button>
+      <button class="tile" data-nav="menus">
+        <span class="emoji">🍽️</span>
+        <span><span class="t-title">Specials &amp; Menus</span><br><span class="t-sub">${(() => {
+          const items = (state.menus || []).flatMap((m) => m.sections.flatMap((s) => s.items));
+          const out = items.filter((i) => i.sold_out).length;
+          return items.length ? `Tap items sold out — boards update instantly${out ? ` · ${out} sold out now` : ''}` : 'No menu boards set up yet';
+        })()}</span></span>
         <span class="t-go">›</span>
       </button>
       <button class="tile" data-nav="photo">
@@ -321,6 +331,34 @@
       </div>`;
   }
 
+  // ---- Specials & menus view -----------------------------------------------------
+
+  function menusHtml() {
+    if (!state.menus || !state.menus.length) {
+      return `${backBtn}
+      <div class="card">
+        <h2>🍽️ Specials &amp; Menus</h2>
+        <div class="muted">No menu boards yet — create one in the dashboard (Media → Menus) and it'll appear here.</div>
+      </div>`;
+    }
+    return backBtn + state.menus.map((m, mi) => `
+      <div class="card">
+        <h2>🍽️ ${esc(m.name)}</h2>
+        <div class="muted">Tap a dish when the kitchen runs out — every board updates straight away.</div>
+        ${m.sections.map((s, si) => `
+          ${s.title ? `<div style="font-weight:800;letter-spacing:.08em;text-transform:uppercase;font-size:12px;opacity:.7;margin:14px 0 4px">${esc(s.title)}</div>` : ''}
+          ${s.items.map((it, ii) => `
+            <button data-mn-toggle data-menu="${esc(m.id)}" data-sec="${si}" data-item="${ii}" data-out="${it.sold_out ? 1 : 0}"
+              style="display:flex;width:100%;align-items:center;gap:10px;text-align:left;margin-top:6px;padding:13px 14px;
+                border-radius:12px;border:1px solid ${it.sold_out ? '#7f1d1d' : 'rgba(255,255,255,.12)'};
+                background:${it.sold_out ? 'rgba(127,29,29,.25)' : 'rgba(255,255,255,.05)'};color:inherit;font-size:15px">
+              <span style="flex:1;${it.sold_out ? 'text-decoration:line-through;opacity:.6' : ''}">${esc(it.name)}${it.price != null ? ` <span style="opacity:.55">$${it.price}</span>` : ''}</span>
+              <span style="font-weight:800;font-size:12px;letter-spacing:.06em;${it.sold_out ? 'color:#fca5a5' : 'opacity:.45'}">${it.sold_out ? 'SOLD OUT — tap to restore' : 'tap = sold out'}</span>
+            </button>`).join('')}
+        `).join('')}
+      </div>`).join('');
+  }
+
   // ---- Photo to screens view ----------------------------------------------------
 
   // Survives the 5s poll re-render: the chosen file and field values live here,
@@ -398,8 +436,9 @@
     const bdDraw = e.target.closest('[data-bd-draw]');
     const bdOutcome = e.target.closest('[data-bd-outcome]');
     const phSend = e.target.closest('[data-ph-send]');
+    const mnToggle = e.target.closest('[data-mn-toggle]');
     if (!spin && !clear && !ckPick && !ckAct && !ckArchive && !ckNew && !ndAdd && !emLevel && !emClear && !returnAds
-      && !whNew && !whLive && !whEnd && !whSpin && !bdNew && !bdLive && !bdEnd && !bdDraw && !bdOutcome && !phSend) return;
+      && !whNew && !whLive && !whEnd && !whSpin && !bdNew && !bdLive && !bdEnd && !bdDraw && !bdOutcome && !phSend && !mnToggle) return;
     if (busy) return;
     busy = true;
     try {
@@ -483,6 +522,13 @@
       } else if (bdDraw) {
         if (navigator.vibrate) navigator.vibrate(80);
         await api('POST', `/api/remote/${token}/badge-draws/${state.badge_draw.id}/draw`);
+      } else if (mnToggle) {
+        if (navigator.vibrate) navigator.vibrate(40);
+        await api('POST', `/api/remote/${token}/menus/${mnToggle.dataset.menu}/sold-out`, {
+          section: parseInt(mnToggle.dataset.sec, 10),
+          item: parseInt(mnToggle.dataset.item, 10),
+          sold_out: mnToggle.dataset.out !== '1',
+        });
       } else if (phSend) {
         if (!photoForm.file) { flashError('Choose a photo first.'); busy = false; return; }
         if (!photoForm.playlist) { flashError('Pick which playlist it should appear in.'); busy = false; return; }

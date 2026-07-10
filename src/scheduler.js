@@ -165,6 +165,21 @@ const CHANNELS = {
 };
 
 function channelPlaylist(channel) {
+  // 'menu:<id>' pins the screen to one menu board full-time (a specials
+  // board by the kitchen, a drinks list over the bar) — no playlist needed.
+  if (String(channel || '').startsWith('menu:')) {
+    const menuId = String(channel).slice(5);
+    const menu = db.get('SELECT id, name FROM menus WHERE id = ?', menuId);
+    if (!menu) return null; // menu deleted -> screen falls back to schedules
+    return {
+      id: `channel:${channel}`,
+      name: `Menu — ${menu.name}`,
+      items: [{
+        id: `channel:${channel}`, media_id: `channel:${channel}`, name: `${menu.name} board`,
+        type: 'widget', src: `menuboard:${menuId}`, content: '', fit: 'cover', duration: 60,
+      }],
+    };
+  }
   const def = CHANNELS[channel];
   if (!def) return null;
   return {
@@ -185,11 +200,13 @@ function buildManifest(screen) {
   const draw = activeDraw(screen);
   const game = cashking.currentGame(screen.venue_id);
   // Licence enforcement: 'basic' screens play scheduled content only — no
-  // game takeovers, no dedicated racing/sports channels. Emergencies always
-  // show (safety is not a billing tier).
+  // game takeovers, no dedicated racing/sports channels. Menu-board channels
+  // are plain content, so any licence gets them; emergencies always show
+  // (safety is not a billing tier).
   const isMainLicense = (screen.license || 'main') === 'main';
+  const isMenuChannel = String(screen.channel || '').startsWith('menu:');
 
-  const dedicated = isMainLicense ? channelPlaylist(screen.channel) : null;
+  const dedicated = (isMainLicense || isMenuChannel) ? channelPlaylist(screen.channel) : null;
   const schedule = dedicated ? null : resolveSchedule(screen);
   const playlist = schedule
     ? db.get('SELECT * FROM playlists WHERE id = ?', schedule.playlist_id)
@@ -210,7 +227,7 @@ function buildManifest(screen) {
       name: screen.name,
       orientation: screen.orientation,
       rotation: screen.rotation || 0,
-      channel: isMainLicense ? (screen.channel || 'main') : 'main',
+      channel: (isMainLicense || isMenuChannel) ? (screen.channel || 'main') : 'main',
       layout: screen.layout || 'full',
       license: screen.license || 'main',
     },

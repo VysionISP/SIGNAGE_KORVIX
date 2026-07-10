@@ -178,6 +178,12 @@ npm test           # end-to-end smoke tests (boots a real server)
 | `html`   | An inline HTML slide stored in the CMS (no assets needed)          |
 | `widget` | Built-in live-data renderer: `jackpot`, `menu`, `weather`, `sports`, `birthdays`, `happyhour`, `cashking`, `welcome`, `menuboard:<id>`, `racing:1/2/3/results`, `qr:<url>\|<label>` (QR generated locally, no external service), `countdown:<datetime>\|<label>` (live D/H/M/S) |
 
+A screen can also be pinned to a single menu full-time by setting its
+channel to **Menu — <board>** on the Screens tab (works on Basic licences) —
+perfect for a specials board by the kitchen. Staff manage stock from the
+games console tablet: the **Specials & Menus** tile lists every board and one
+tap flips an item to sold out (and back) on every screen within a second.
+
 The Content tab has one-click **Quick slides** builders for the QR and
 countdown widgets, and staff can push a **photo straight from the games
 console tablet** into any playlist — it self-expires after the chosen hours

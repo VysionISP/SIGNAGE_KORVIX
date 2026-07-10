@@ -223,6 +223,7 @@
       if (layer._widgetHtml !== html) {
         layer._widgetHtml = html;
         slide.innerHTML = html;
+        fitMenuBoards(layer);
       }
     };
     refresh(currentLayer, playableItems()[itemIndex]);
@@ -296,6 +297,7 @@
     stage.appendChild(layer);
     requestAnimationFrame(() => requestAnimationFrame(() => {
       layer.classList.add('visible');
+      fitMenuBoards(layer);
       if (old) {
         old.classList.remove('visible');
         setTimeout(() => old.remove(), 700);
@@ -478,8 +480,12 @@
     // big price, FEATURED tag in the theme accent. They leave the list flow.
     const featured = menu.sections.flatMap((s) => s.items.filter((i) => i.featured)).slice(0, 3);
     // Photos keep a natural 16:9 crop (aspect-ratio, not a fixed strip) so
-    // dishes aren't beheaded; descriptions clamp at 3 lines so one wordy item
-    // can't blow the card out.
+    // dishes aren't beheaded. Descriptions show in full when the featured
+    // cards have the board to themselves; only when list sections need the
+    // space below do they clamp (5 lines) to protect the rest of the menu.
+    const hasListBelow = menu.sections.some((s) => s.items.some((i) => !i.featured));
+    const descClamp = hasListBelow
+      ? 'display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden;' : '';
     const heroHtml = featured.length ? `
       <div style="display:flex;gap:2vw;width:100%;margin-bottom:2.6vh;align-items:stretch">
         ${featured.map((item) => `
@@ -494,7 +500,7 @@
               <span style="flex:1"></span>
               <span style="font-size:2.6vw;font-weight:900;color:${T.section};font-variant-numeric:tabular-nums">${price(item.price)}</span>
             </div>
-            ${item.desc ? `<div style="font-size:1.5vw;color:${T.muted};margin-top:.3vh;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">${esc(item.desc)}</div>` : ''}
+            ${item.desc ? `<div style="font-size:1.4vw;line-height:1.5;color:${T.muted};margin-top:.3vh;${descClamp}">${esc(item.desc)}</div>` : ''}
           </div>
         </div>`).join('')}
       </div>` : '';
@@ -523,8 +529,23 @@
       ${logo}
       <div style="font-size:3.6vw;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-bottom:2.4vh;border-bottom:${T.titleRule};padding-bottom:1vh;width:100%;text-align:center;color:${T.name};${T.nameExtra || ''}">${esc(menu.name)}</div>
       ${heroHtml}
-      <div style="columns:${cols};column-gap:3.5vw;width:100%;flex:1;overflow:hidden">${sectionsHtml}</div>
+      <div data-menufit style="columns:${cols};column-gap:3.5vw;width:100%;flex:1;overflow:hidden">${sectionsHtml}</div>
     </div>`;
+  }
+
+  // Menu boards must never clip: if the list area overflows its box, zoom it
+  // down (hero cards keep their size — only the lists shrink) until it fits.
+  function fitMenuBoards(scope) {
+    if (!scope || !scope.querySelectorAll) return;
+    scope.querySelectorAll('[data-menufit]').forEach((el) => {
+      el.style.zoom = '';
+      for (let pass = 0; pass < 4; pass++) {
+        if (el.scrollHeight <= el.clientHeight + 2 || !el.scrollHeight) break;
+        const next = (parseFloat(el.style.zoom) || 1) * (el.clientHeight / el.scrollHeight);
+        el.style.zoom = String(Math.max(0.55, next));
+        if (next <= 0.55) break;
+      }
+    });
   }
 
   function renderWidget(name) {
@@ -736,6 +757,7 @@
     $('side').appendChild(layer);
     requestAnimationFrame(() => requestAnimationFrame(() => {
       layer.classList.add('visible');
+      fitMenuBoards(layer);
       if (old) { old.classList.remove('visible'); setTimeout(() => old.remove(), 700); }
     }));
     sideTimer = setTimeout(nextSideItem, Math.max(1, item.duration || 10) * 1000);

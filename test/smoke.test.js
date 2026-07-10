@@ -1334,3 +1334,85 @@ test('licensing: main vs basic screens drive features and billing', async (t) =>
     assert.strictEqual(priceDenied.status, 403);
   });
 });
+
+// ---- Specials menu screens + tablet sold-out control -------------------------------
+
+test('menu-board channel screens and tablet sold-out toggles', async (t) => {
+  let orgId, venueId, screenId, deviceKey, menuId, remoteToken;
+
+  await t.test('setup: venue, basic screen, specials menu, console token', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'Specials Test Group' });
+    orgId = org.data.id;
+    const venue = await api('POST', '/api/venues', { name: 'Specials Hotel', org_id: orgId });
+    venueId = venue.data.id;
+    const screen = await api('POST', `/api/venues/${venueId}/screens`, { name: 'Kitchen Board' });
+    screenId = screen.data.id;
+    const hello = await api('POST', '/api/player/hello', {});
+    deviceKey = hello.data.device_key;
+    await api('POST', `/api/screens/${screenId}/pair`, { pairing_code: hello.data.pairing_code });
+    await api('PATCH', `/api/screens/${screenId}`, { license: 'basic' });
+
+    const menu = await api('POST', `/api/venues/${venueId}/menus`, {
+      name: 'Specials', sections: [{ title: 'Tonight', items: [
+        { name: 'Parma Night', price: 20 }, { name: 'Steak Special', price: 30 },
+      ] }],
+    });
+    menuId = menu.data.id;
+    remoteToken = (await api('POST', `/api/venues/${venueId}/remote-token`)).data.token;
+  });
+
+  await t.test('menu channel works on a BASIC screen and feeds the board widget', async () => {
+    const bad = await api('PATCH', `/api/screens/${screenId}`, { channel: 'menu:nope' });
+    assert.strictEqual(bad.status, 400);
+
+    const set = await api('PATCH', `/api/screens/${screenId}`, { channel: `menu:${menuId}` });
+    assert.strictEqual(set.status, 200);
+    assert.strictEqual(set.data.channel, `menu:${menuId}`);
+    assert.strictEqual(set.data.license, 'basic'); // no upgrade needed
+
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.screen.channel, `menu:${menuId}`);
+    assert.strictEqual(manifest.data.playlist.items[0].type, 'widget');
+    assert.strictEqual(manifest.data.playlist.items[0].src, `menuboard:${menuId}`);
+    // and racing is still refused on basic
+    const racing = await api('PATCH', `/api/screens/${screenId}`, { channel: 'racing1' });
+    assert.strictEqual(racing.status, 400);
+  });
+
+  await t.test('tablet toggles sold out; boards see it via the manifest', async () => {
+    const state = await api('GET', `/api/remote/${remoteToken}`);
+    assert.strictEqual(state.data.menus.length, 1);
+    assert.strictEqual(state.data.menus[0].sections[0].items[1].name, 'Steak Special');
+
+    const flip = await api('POST', `/api/remote/${remoteToken}/menus/${menuId}/sold-out`,
+      { section: 0, item: 1, sold_out: true });
+    assert.strictEqual(flip.status, 200);
+    assert.strictEqual(flip.data.item.sold_out, true);
+
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    const board = manifest.data.menus.find((m) => m.id === menuId);
+    assert.strictEqual(board.sections[0].items[1].sold_out, true);
+    assert.strictEqual(board.sections[0].items[0].sold_out, false);
+
+    const restore = await api('POST', `/api/remote/${remoteToken}/menus/${menuId}/sold-out`,
+      { section: 0, item: 1, sold_out: false });
+    assert.strictEqual(restore.data.item.sold_out, false);
+
+    const badIdx = await api('POST', `/api/remote/${remoteToken}/menus/${menuId}/sold-out`,
+      { section: 9, item: 0, sold_out: true });
+    assert.strictEqual(badIdx.status, 400);
+
+    // another venue's console token cannot touch this menu
+    const v2 = await api('POST', '/api/venues', { name: 'Other Pub', org_id: orgId });
+    const t2 = (await api('POST', `/api/venues/${v2.data.id}/remote-token`)).data.token;
+    const crossed = await api('POST', `/api/remote/${t2}/menus/${menuId}/sold-out`,
+      { section: 0, item: 0, sold_out: true });
+    assert.strictEqual(crossed.status, 404);
+  });
+
+  await t.test('deleting the menu drops the channel back to schedules', async () => {
+    await api('DELETE', `/api/menus/${menuId}`);
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.playlist, null); // no schedule set up -> standby
+  });
+});
