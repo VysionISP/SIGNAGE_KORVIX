@@ -157,6 +157,7 @@ route('POST', '/api/venues/:venueId/screens', async (req, res, params) => {
 
 const ROTATIONS = new Set([0, 90, 180, 270]);
 const SCREEN_CHANNELS = new Set(['main', 'racing1', 'racing2', 'racing3', 'racing-results', 'sports']);
+const LAYOUTS = new Set(['full', 'side', 'ticker', 'side-ticker']);
 
 route('PATCH', '/api/screens/:id', async (req, res, params) => {
   const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
@@ -170,12 +171,21 @@ route('PATCH', '/api/screens/:id', async (req, res, params) => {
   if (body.channel !== undefined && !SCREEN_CHANNELS.has(body.channel)) {
     throw new HttpError(400, `channel must be one of: ${[...SCREEN_CHANNELS].join(', ')}`);
   }
-  db.run('UPDATE screens SET name = ?, zone_id = ?, orientation = ?, rotation = ?, channel = ? WHERE id = ?',
+  if (body.layout !== undefined && !LAYOUTS.has(body.layout)) {
+    throw new HttpError(400, `layout must be one of: ${[...LAYOUTS].join(', ')}`);
+  }
+  if (body.side_playlist_id) {
+    const pl = db.get('SELECT venue_id FROM playlists WHERE id = ?', body.side_playlist_id);
+    if (!pl || pl.venue_id !== screen.venue_id) throw new HttpError(400, 'unknown side playlist');
+  }
+  db.run('UPDATE screens SET name = ?, zone_id = ?, orientation = ?, rotation = ?, channel = ?, layout = ?, side_playlist_id = ? WHERE id = ?',
     body.name ?? screen.name,
     body.zone_id !== undefined ? (body.zone_id || null) : screen.zone_id,
     body.orientation ?? screen.orientation,
     rotation,
     body.channel ?? screen.channel ?? 'main',
+    body.layout ?? screen.layout ?? 'full',
+    body.side_playlist_id !== undefined ? (body.side_playlist_id || null) : screen.side_playlist_id,
     screen.id);
   if (screen.device_key) sse.send(screen.device_key, 'refresh', { reason: 'screen-updated' });
   sendJson(res, 200, withStatus(db.get('SELECT * FROM screens WHERE id = ?', screen.id)));

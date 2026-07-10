@@ -18,6 +18,7 @@ const integrationRoutes = require('./routes/integrations').routes;
 const remoteRoutes = require('./routes/remote').routes;
 const authRoutes = require('./routes/auth').routes;
 const cardGameRoutes = require('./routes/cardgames').routes;
+const menuRoutes = require('./routes/menus').routes;
 
 const PORT = parseInt(process.env.PORT, 10) || 4700;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -44,7 +45,7 @@ const MIME = {
 
 // ---- routing --------------------------------------------------------------
 
-const allRoutes = [...adminRoutes, ...playerRoutes, ...integrationRoutes, ...remoteRoutes, ...authRoutes, ...cardGameRoutes];
+const allRoutes = [...adminRoutes, ...playerRoutes, ...integrationRoutes, ...remoteRoutes, ...authRoutes, ...cardGameRoutes, ...menuRoutes];
 
 function compile(pattern) {
   const names = [];

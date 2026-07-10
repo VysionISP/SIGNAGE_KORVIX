@@ -184,6 +184,17 @@ CREATE TABLE IF NOT EXISTS card_games (
   won_at TEXT
 );
 
+-- Menu boards: venue-editable menus rendered by the 'menuboard:<id>' widget.
+-- sections JSON: [{title, items: [{name, desc, price, sold_out}]}]
+CREATE TABLE IF NOT EXISTS menus (
+  id TEXT PRIMARY KEY,
+  venue_id TEXT NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT 'Menu',
+  sections TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Wheel Spin: configurable prize wheel. Wedges carry a label + probability
 -- weight (equal-sized on screen; weight only affects the odds).
 CREATE TABLE IF NOT EXISTS wheels (
@@ -261,6 +272,11 @@ function migrate() {
     // main = scheduled playlists; racing1/2/3, racing-results, sports = the
     // screen is dedicated to that live channel and ignores schedules.
     db.exec("ALTER TABLE screens ADD COLUMN channel TEXT NOT NULL DEFAULT 'main'");
+  }
+  if (!screenCols.includes('layout')) {
+    // full | side (main + side panel) | ticker | side-ticker
+    db.exec("ALTER TABLE screens ADD COLUMN layout TEXT NOT NULL DEFAULT 'full'");
+    db.exec('ALTER TABLE screens ADD COLUMN side_playlist_id TEXT');
   }
   if (!screenCols.includes('alerted')) {
     // 1 while an offline alert is outstanding, so we alert once per outage.

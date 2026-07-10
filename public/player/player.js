@@ -166,9 +166,15 @@
   function applyManifest(next) {
     const prevPlaylist = JSON.stringify(manifest && manifest.playlist);
     const prevEmergency = JSON.stringify(manifest && manifest.emergency);
+    const prevManifestSnapshot = {
+      side: JSON.stringify(manifest && manifest.side_playlist),
+      ticker: JSON.stringify(manifest && manifest.ticker),
+      layout: manifest && manifest.screen && manifest.screen.layout,
+    };
     manifest = next;
     renderStatus();
     renderRotation();
+    renderLayout(prevManifestSnapshot);
     renderEmergency();
     renderDraw();
     renderCashKing();
@@ -343,9 +349,39 @@
       '#052e16,#14532d');
   }
 
+  // Designed menu board: sections flow in columns, dotted leaders to prices,
+  // sold-out items greyed with a badge. Data lives in manifest.menus.
+  function menuBoardWidget(menuId) {
+    const menu = ((manifest && manifest.menus) || []).find((m) => m.id === menuId);
+    if (!menu) {
+      return widgetShell('MENU', '<h1>Menu board</h1><div style="opacity:.7;font-size:2.4vw">This menu was deleted — remove it from the playlist.</div>', '#1c1917,#3f3f46');
+    }
+    const price = (p) => p == null ? '' : '$' + Number(p).toFixed(2).replace(/\.00$/, '');
+    const sectionsHtml = menu.sections.map((section) => `
+      <div style="break-inside:avoid;margin-bottom:2.6vh;text-align:left">
+        <div style="font-size:2.4vw;font-weight:800;letter-spacing:.14em;color:#fbbf24;border-bottom:.15vh solid #fbbf2455;padding-bottom:.6vh;margin-bottom:1.2vh;text-transform:uppercase">${esc(section.title)}</div>
+        ${section.items.map((item) => `
+          <div style="margin-bottom:1.1vh;${item.sold_out ? 'opacity:.45' : ''}">
+            <div style="display:flex;align-items:baseline;gap:.8vw">
+              <span style="font-size:1.9vw;font-weight:700;${item.sold_out ? 'text-decoration:line-through' : ''}">${esc(item.name)}</span>
+              ${item.sold_out ? '<span style="font-size:1.1vw;font-weight:800;color:#f87171;border:.1vw solid #f87171;border-radius:.4vw;padding:0 .5vw">SOLD OUT</span>' : ''}
+              <span style="flex:1;border-bottom:.2vh dotted rgba(255,255,255,.35);transform:translateY(-.5vh)"></span>
+              <span style="font-size:1.9vw;font-weight:700;font-variant-numeric:tabular-nums">${price(item.price)}</span>
+            </div>
+            ${item.desc ? `<div style="font-size:1.35vw;opacity:.75;margin-top:.2vh">${esc(item.desc)}</div>` : ''}
+          </div>`).join('')}
+      </div>`).join('');
+    const cols = menu.sections.length >= 3 ? 3 : menu.sections.length === 2 ? 2 : 1;
+    return `<div class="widget" style="background:linear-gradient(160deg,#1c1410,#0d0906);justify-content:flex-start;padding:3vh 4vw">
+      <div style="font-size:3.6vw;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-bottom:2.4vh;border-bottom:.3vh double #fbbf2488;padding-bottom:1vh;width:100%;text-align:center">${esc(menu.name)}</div>
+      <div style="columns:${cols};column-gap:3.5vw;width:100%;flex:1;overflow:hidden">${sectionsHtml}</div>
+    </div>`;
+  }
+
   function renderWidget(name) {
     const feeds = (manifest && manifest.feeds) || {};
     if (name.startsWith('racing:')) return racingWidget(name.slice(7));
+    if (name.startsWith('menuboard:')) return menuBoardWidget(name.slice(10));
     switch (name) {
       case 'jackpot': {
         const jackpots = (feeds.gaming && feeds.gaming.jackpots) || [];
@@ -451,6 +487,91 @@
   function widgetShell(kicker, inner, gradient) {
     return `<div class="widget" style="background:linear-gradient(135deg,${gradient})">` +
       `<div class="kicker">${kicker}</div>${inner}</div>`;
+  }
+
+  // ---- split-screen layout: side panel rotation + ticker strip ----------------------
+
+  let sideItems = [];
+  let sideIndex = -1;
+  let sideTimer = null;
+  let sideLayer = null;
+
+  function renderLayout(prev) {
+    const layout = (manifest && manifest.screen && manifest.screen.layout) || 'full';
+    const root = $('root');
+    root.classList.toggle('lay-side', layout === 'side' || layout === 'side-ticker');
+    root.classList.toggle('lay-ticker', layout === 'ticker' || layout === 'side-ticker');
+
+    // Ticker
+    const messages = (manifest && manifest.ticker) || [];
+    if (JSON.stringify(manifest.ticker) !== prev.ticker || layout !== prev.layout) {
+      const el = $('tk-text');
+      if (messages.length) {
+        const text = messages.join('      •      ');
+        el.textContent = text;
+        el.style.animationDuration = Math.max(18, text.length * 0.28) + 's';
+      } else {
+        el.textContent = '';
+      }
+    }
+
+    // Side panel rotation
+    const sideJson = JSON.stringify(manifest.side_playlist);
+    if (sideJson !== prev.side || layout !== prev.layout) {
+      clearTimeout(sideTimer);
+      sideTimer = null;
+      sideIndex = -1;
+      $('side').innerHTML = '';
+      sideLayer = null;
+      sideItems = (manifest.side_playlist && manifest.side_playlist.items) || [];
+      if (sideItems.length && (layout === 'side' || layout === 'side-ticker')) nextSideItem();
+    }
+  }
+
+  function nextSideItem() {
+    clearTimeout(sideTimer);
+    if (!sideItems.length) return;
+    sideIndex = (sideIndex + 1) % sideItems.length;
+    const item = sideItems[sideIndex];
+    const layer = buildSideLayer(item);
+    const old = sideLayer;
+    sideLayer = layer;
+    $('side').appendChild(layer);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      layer.classList.add('visible');
+      if (old) { old.classList.remove('visible'); setTimeout(() => old.remove(), 700); }
+    }));
+    sideTimer = setTimeout(nextSideItem, Math.max(1, item.duration || 10) * 1000);
+  }
+
+  // Side layers: images/videos fill the panel directly; html/widget slides are
+  // authored for a full 16:9 viewport, so render them full-size and scale down
+  // to the panel width (vertically centred) — everything looks as designed.
+  function buildSideLayer(item) {
+    const layer = document.createElement('div');
+    layer.className = 'layer';
+    if (item.type === 'image') {
+      const img = document.createElement('img');
+      img.src = item.src;
+      img.style.objectFit = item.fit === 'contain' ? 'contain' : 'cover';
+      layer.appendChild(img);
+    } else if (item.type === 'video') {
+      const video = document.createElement('video');
+      video.src = item.src;
+      video.autoplay = true; video.muted = true; video.playsInline = true; video.loop = true;
+      video.style.objectFit = item.fit === 'contain' ? 'contain' : 'cover';
+      layer.appendChild(video);
+    } else {
+      const panel = $('side');
+      const scale = panel.clientWidth / window.innerWidth;
+      const wrap = document.createElement('div');
+      wrap.style.cssText = `width:${window.innerWidth}px;height:${window.innerHeight}px;`
+        + `transform:scale(${scale});transform-origin:top left;position:absolute;`
+        + `top:${Math.max(0, (panel.clientHeight - window.innerHeight * scale) / 2)}px;left:0`;
+      wrap.innerHTML = `<div class="html-slide">${item.type === 'widget' ? renderWidget(item.src) : (item.content || '')}</div>`;
+      layer.appendChild(wrap);
+    }
+    return layer;
   }
 
   // ---- physical rotation ----------------------------------------------------------

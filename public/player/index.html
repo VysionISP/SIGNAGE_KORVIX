@@ -17,6 +17,23 @@
   .layer img, .layer video, .layer iframe { width: 100%; height: 100%; object-fit: cover; border: 0; display: block; }
   .layer .html-slide { width: 100%; height: 100%; }
 
+  /* Split-screen layouts: main region shrinks, side panel and ticker appear */
+  #stage { position: absolute; inset: 0; overflow: hidden; }
+  #side { display: none; position: absolute; top: 0; right: 0; bottom: 0; width: 33.4%; overflow: hidden; background: #000; border-left: 1px solid rgba(255,255,255,.12); }
+  #root.lay-side #stage { right: 33.4%; }
+  #root.lay-side #side { display: block; }
+  #ticker {
+    display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 6vh; z-index: 60;
+    background: #05070d; border-top: 1px solid rgba(255,255,255,.12); overflow: hidden; align-items: center;
+  }
+  #root.lay-ticker #stage, #root.lay-ticker #side { bottom: 6vh; }
+  #root.lay-ticker #ticker { display: flex; }
+  #ticker .tk {
+    white-space: nowrap; font-size: 3.4vh; font-weight: 600; padding-left: 100vw;
+    animation: tkscroll linear infinite; will-change: transform;
+  }
+  @keyframes tkscroll { to { transform: translateX(-100%); } }
+
   #pairing, #standby {
     position: absolute; inset: 0; display: none; flex-direction: column;
     align-items: center; justify-content: center; text-align: center;
@@ -161,6 +178,8 @@
 <body>
 <div id="root">
   <div id="stage"></div>
+  <div id="side"></div>
+  <div id="ticker"><div class="tk" id="tk-text"></div></div>
 
   <div id="pairing">
     <div class="brand">KORVIX SIGNAGE</div>

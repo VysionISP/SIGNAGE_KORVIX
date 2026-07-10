@@ -112,6 +112,18 @@ npm test           # end-to-end smoke tests (boots a real server)
   a spinning number and reveal the winner. Draw again for "winner not
   present" — a number is never repeated within a draw. Clearing returns
   screens to scheduled content.
+- **Menu board designer.** Venues design menus in the dashboard (sections →
+  items with descriptions, prices and a sold-out toggle); each menu renders
+  as a polished board widget that lands in the Content gallery automatically.
+  Saves — including sold-out ticks mid-service — hit the screens within a
+  second. `GET/POST /api/venues/:id/menus`, `PATCH/DELETE /api/menus/:id`.
+- **Split-screen layouts.** Per screen: full, main + side panel (promo
+  rotation in the right third, scaled-to-fit), main + scrolling bottom
+  ticker, or all three. Side panel plays any playlist; ticker messages are
+  venue-wide (Screens page, or push to the `ticker` webhook source).
+- **Visual schedule calendar.** The Schedules page opens with a 24-hour
+  timeline of the selected weekday (bars per schedule, midnight wraps shown
+  as two bars) and a month grid of dated campaigns.
 - **CashKing — digital card game (Jag the Joker).** A cryptographically
   shuffled board of 53 cards (52 + Joker) shown live on every screen in the
   venue. One card revealed per game night: a miss rolls the jackpot up by

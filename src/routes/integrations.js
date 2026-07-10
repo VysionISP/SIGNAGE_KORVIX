@@ -21,7 +21,7 @@ const { nudgeVenue } = require('./admin');
 const routes = [];
 function route(method, pattern, handler) { routes.push({ method, pattern, handler }); }
 
-const SOURCES = new Set(['pos', 'gaming', 'weather', 'sports', 'racing', 'membership', 'custom']);
+const SOURCES = new Set(['pos', 'gaming', 'weather', 'sports', 'racing', 'membership', 'ticker', 'custom']);
 
 route('POST', '/api/integrations/:venueId/:source', async (req, res, params) => {
   if (!SOURCES.has(params.source)) {

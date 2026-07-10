@@ -203,7 +203,21 @@ function buildManifest(screen) {
       orientation: screen.orientation,
       rotation: screen.rotation || 0,
       channel: screen.channel || 'main',
+      layout: screen.layout || 'full',
     },
+    // Split-screen extras: a side-panel rotation and a bottom ticker strip.
+    side_playlist: (screen.layout === 'side' || screen.layout === 'side-ticker') && screen.side_playlist_id
+      ? { id: screen.side_playlist_id, items: playlistItems(screen.side_playlist_id) }
+      : null,
+    ticker: (() => {
+      if (screen.layout !== 'ticker' && screen.layout !== 'side-ticker') return null;
+      const feed = db.get('SELECT payload FROM feeds WHERE venue_id = ? AND source = ?', screen.venue_id, 'ticker');
+      try { return feed ? (JSON.parse(feed.payload).messages || []) : []; } catch { return []; }
+    })(),
+    menus: db.all('SELECT * FROM menus WHERE venue_id = ?', screen.venue_id).map((m) => {
+      let sections; try { sections = JSON.parse(m.sections); } catch { sections = []; }
+      return { id: m.id, name: m.name, sections };
+    }),
     venue: { id: venue.id, name: venue.name, timezone: venue.timezone },
     zone: zone ? { id: zone.id, name: zone.name } : null,
     emergency: emergency && {

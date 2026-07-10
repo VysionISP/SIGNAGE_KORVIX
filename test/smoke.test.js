@@ -482,6 +482,70 @@ test('full venue lifecycle', async (t) => {
     assert.strictEqual(off.data.racing_jurisdiction, null);
   });
 
+  await t.test('menu boards: designer CRUD, widget media, instant sold-out', async () => {
+    const menu = await api('POST', `/api/venues/${venueId}/menus`, {
+      name: 'Bistro Dinner',
+      sections: [{
+        title: 'Mains',
+        items: [
+          { name: 'Chicken Schnitzel', desc: 'w/ chips & salad', price: 24.5 },
+          { name: 'Grilled Barramundi', price: 29, sold_out: false },
+        ],
+      }],
+    });
+    assert.strictEqual(menu.status, 201);
+    const menuId = menu.data.id;
+
+    // A widget media item was auto-created, ready for playlists
+    const { data: { media: lib } } = await api('GET', `/api/venues/${venueId}/media`);
+    const board = lib.find((m) => m.src === `menuboard:${menuId}`);
+    assert.ok(board, 'board widget exists in the library');
+    assert.strictEqual(board.name, 'Bistro Dinner board');
+
+    // Menu data reaches the player manifest
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    let served = manifest.data.menus.find((m) => m.id === menuId);
+    assert.strictEqual(served.sections[0].items[0].name, 'Chicken Schnitzel');
+    assert.strictEqual(served.sections[0].items[0].sold_out, false);
+
+    // Sold-out toggle lands on screens via a plain PATCH
+    const sections = menu.data.sections;
+    sections[0].items[1].sold_out = true;
+    await api('PATCH', `/api/menus/${menuId}`, { sections });
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    served = manifest.data.menus.find((m) => m.id === menuId);
+    assert.strictEqual(served.sections[0].items[1].sold_out, true);
+
+    // Deleting the menu takes its board media with it
+    await api('DELETE', `/api/menus/${menuId}`);
+    const after = await api('GET', `/api/venues/${venueId}/media`);
+    assert.ok(!after.data.media.find((m) => m.src === `menuboard:${menuId}`));
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.ok(!manifest.data.menus.find((m) => m.id === menuId));
+  });
+
+  await t.test('split-screen layouts: side playlist + ticker in the manifest', async () => {
+    const bad = await api('PATCH', `/api/screens/${screenId}`, { layout: 'diagonal' });
+    assert.strictEqual(bad.status, 400);
+
+    const sidePl = await api('POST', `/api/venues/${venueId}/playlists`, { name: 'Side promos' });
+    await api('POST', `/api/playlists/${sidePl.data.id}/items`, { media_id: mediaId });
+    await api('POST', `/api/integrations/${venueId}/ticker`, { messages: ['Happy hour 3-6pm', 'Live music Friday'] });
+
+    await api('PATCH', `/api/screens/${screenId}`, { layout: 'side-ticker', side_playlist_id: sidePl.data.id });
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.screen.layout, 'side-ticker');
+    assert.strictEqual(manifest.data.side_playlist.items.length, 1);
+    assert.deepStrictEqual(manifest.data.ticker, ['Happy hour 3-6pm', 'Live music Friday']);
+
+    // Full layout: extras drop away
+    await api('PATCH', `/api/screens/${screenId}`, { layout: 'full' });
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.side_playlist, null);
+    assert.strictEqual(manifest.data.ticker, null);
+    await api('DELETE', `/api/playlists/${sidePl.data.id}`);
+  });
+
   await t.test('unpair returns player to pending', async () => {
     await api('POST', `/api/screens/${screenId}/unpair`);
     const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);

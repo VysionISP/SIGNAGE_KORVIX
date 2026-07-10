@@ -219,6 +219,36 @@ function seedDemo() {
      VALUES (?, ?, NULL, ?, 1, 200, ?)`,
     db.id(), venueId, 'Friday Meat Raffle', now);
 
+  // Designed menu board (Menus page) + its widget in the content library.
+  const menuId = db.id();
+  db.run('INSERT INTO menus (id, venue_id, name, sections, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    menuId, venueId, 'Bistro Dinner', JSON.stringify([
+      {
+        title: 'Mains',
+        items: [
+          { name: 'Chicken Schnitzel', desc: 'chips, salad & gravy', price: 24.5, sold_out: false },
+          { name: '300g Rump', desc: 'cooked to your liking', price: 32, sold_out: false },
+          { name: 'Grilled Barramundi', desc: 'lemon butter, greens', price: 29.5, sold_out: false },
+          { name: 'Pumpkin Risotto', desc: 'sage, parmesan', price: 24, sold_out: true },
+        ],
+      },
+      {
+        title: 'Kids',
+        items: [
+          { name: 'Nuggets & chips', price: 12, sold_out: false },
+          { name: 'Mini schnitty', price: 13, sold_out: false },
+        ],
+      },
+      {
+        title: 'Desserts',
+        items: [
+          { name: 'Sticky Date Pudding', desc: 'butterscotch, vanilla ice cream', price: 12, sold_out: false },
+          { name: 'Pavlova', desc: 'seasonal fruit', price: 11, sold_out: false },
+        ],
+      },
+    ]), now, now);
+  media('Bistro Dinner board', 'widget', { src: `menuboard:${menuId}`, duration: 20 });
+
   require('./cardgame').createGame(venueId, {
     name: 'CashKing', jackpot_start: 1000, jackpot_increment: 150,
     session_text: 'Drawn Thursdays 7:30pm — members only',

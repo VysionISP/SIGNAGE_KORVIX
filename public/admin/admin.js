@@ -147,7 +147,7 @@
   const NAV = [
     { tab: 'overview', label: 'Overview' },
     { tab: 'screens', label: 'Screens' },
-    { label: 'Media', tabs: [['content', 'Content'], ['playlists', 'Playlists'], ['schedules', 'Schedules']] },
+    { label: 'Media', tabs: [['content', 'Content'], ['menus', 'Menus'], ['playlists', 'Playlists'], ['schedules', 'Schedules']] },
     { label: 'Games', tabs: [['draws', 'Draws'], ['cashking', 'CashKing'], ['tablet', 'Manage Tablet', 'admin']] },
     { tab: 'emergency', label: 'Emergency' },
     {
@@ -220,7 +220,7 @@
       playlists: renderPlaylists, schedules: renderSchedules, draws: renderDraws,
       emergency: renderEmergency, integrations: renderIntegrations, reports: renderReports,
       users: renderUsers, orgs: renderOrgs, cashking: renderCashKing, tablet: renderTablet,
-      venue: renderVenueSettings,
+      venue: renderVenueSettings, menus: renderMenus,
     };
     await renderers[activeTab]();
     await renderBanner();
@@ -297,18 +297,21 @@
   // ---- screens ------------------------------------------------------------------
 
   async function renderScreens() {
-    const [{ screens }, { pairings }] = await Promise.all([
+    const [{ screens }, { pairings }, { playlists }, { feeds }] = await Promise.all([
       api('GET', `/api/venues/${venueId}/screens`),
       api('GET', '/api/pairings'),
+      api('GET', `/api/venues/${venueId}/playlists`),
+      api('GET', `/api/integrations/${venueId}`),
     ]);
     const zones = venue().zones || [];
+    const tickerMessages = (feeds.find((f) => f.source === 'ticker')?.payload?.messages) || [];
 
     $('#tab-screens').innerHTML = `
       <h2>Screens</h2>
       <p class="muted">Channel: <b>Main</b> plays scheduled playlists; <b>Racing</b> screens are dedicated
       next-to-go / results boards fed live (set the jurisdiction on the Integrations tab); <b>Sports</b> shows the fixtures feed full-time.</p>
       <table>
-        <thead><tr><th>Name</th><th>Zone</th><th>Channel</th><th>Rotation</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Zone</th><th>Channel</th><th>Layout</th><th>Rotation</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
         <tbody>${screens.map((s) => `
           <tr>
             <td>${esc(s.name)} <span class="muted">${s.orientation}</span></td>
@@ -318,6 +321,17 @@
                  ['racing3', 'Racing — 3rd race'], ['racing-results', 'Racing — Results'], ['sports', 'Sports']]
                 .map(([v, label]) => `<option value="${v}" ${(s.channel || 'main') === v ? 'selected' : ''}>${label}</option>`).join('')}
             </select></td>
+            <td>
+              <select data-layout="${s.id}">
+                ${[['full', 'Full screen'], ['side', 'Main + side panel'], ['ticker', 'Main + ticker'], ['side-ticker', 'Main + side + ticker']]
+                  .map(([v, label]) => `<option value="${v}" ${(s.layout || 'full') === v ? 'selected' : ''}>${label}</option>`).join('')}
+              </select>
+              ${(s.layout === 'side' || s.layout === 'side-ticker') ? `
+              <select data-sidepl="${s.id}" style="margin-top:4px" title="What plays in the side panel">
+                <option value="">side panel: — pick playlist —</option>
+                ${playlists.map((p) => `<option value="${p.id}" ${s.side_playlist_id === p.id ? 'selected' : ''}>side: ${esc(p.name)}</option>`).join('')}
+              </select>` : ''}
+            </td>
             <td><select data-rotate="${s.id}">
               ${[0, 90, 180, 270].map((r) => `<option value="${r}" ${(s.rotation || 0) === r ? 'selected' : ''}>${r}&deg;</option>`).join('')}
             </select></td>
@@ -331,9 +345,15 @@
                 : `<button class="btn small" data-act="pair" data-id="${s.id}">Pair device</button>`}
               <button class="btn small danger" data-act="del-screen" data-id="${s.id}">Delete</button>
             </td>
-          </tr>`).join('') || '<tr><td class="muted" colspan="7">No screens yet</td></tr>'}
+          </tr>`).join('') || '<tr><td class="muted" colspan="8">No screens yet</td></tr>'}
         </tbody>
       </table>
+
+      <h2>Ticker messages <span class="muted" style="font-weight:400;font-size:13px">· shown on screens with a ticker layout</span></h2>
+      <div class="card">
+        <textarea id="ticker-msgs" placeholder="One message per line — e.g.&#10;Happy hour 3–6pm daily&#10;Live music Friday — The Flannel Shirts&#10;Book your Christmas party now" style="min-height:70px">${esc(tickerMessages.join('\n'))}</textarea>
+        <button class="btn small" id="ticker-save" style="margin-top:8px">Save ticker</button>
+      </div>
 
       <h2>Add screen</h2>
       <div class="form-grid card">
@@ -382,6 +402,16 @@
       if (rotate) return api('PATCH', `/api/screens/${rotate.dataset.rotate}`, { rotation: parseInt(rotate.value, 10) });
       const channel = e.target.closest('[data-channel]');
       if (channel) return api('PATCH', `/api/screens/${channel.dataset.channel}`, { channel: channel.value });
+      const layout = e.target.closest('[data-layout]');
+      if (layout) { await api('PATCH', `/api/screens/${layout.dataset.layout}`, { layout: layout.value }); return render(); }
+      const sidepl = e.target.closest('[data-sidepl]');
+      if (sidepl) return api('PATCH', `/api/screens/${sidepl.dataset.sidepl}`, { side_playlist_id: sidepl.value || null });
+    };
+    $('#ticker-save').onclick = async () => {
+      const messages = $('#ticker-msgs').value.split('\n').map((l) => l.trim()).filter(Boolean);
+      await api('POST', `/api/integrations/${venueId}/ticker`, { messages });
+      $('#ticker-save').textContent = '✓ Saved';
+      setTimeout(() => { $('#ticker-save').textContent = 'Save ticker'; }, 1500);
     };
     $('#tab-screens').onclick = async (e) => {
       const el = e.target.closest('[data-act]');
@@ -682,6 +712,107 @@
     };
   }
 
+  // ---- menu board designer -------------------------------------------------------------
+
+  function menuFromDom(card) {
+    return {
+      name: card.querySelector('[data-mn-name]').value.trim() || 'Menu',
+      sections: [...card.querySelectorAll('[data-mn-section]')].map((sec) => ({
+        title: sec.querySelector('[data-mn-title]').value.trim(),
+        items: [...sec.querySelectorAll('[data-mn-item]')].map((row) => ({
+          name: row.querySelector('[data-mn-iname]').value.trim(),
+          desc: row.querySelector('[data-mn-idesc]').value.trim(),
+          price: row.querySelector('[data-mn-iprice]').value.trim(),
+          sold_out: row.querySelector('[data-mn-isold]').checked,
+        })).filter((i) => i.name),
+      })),
+    };
+  }
+
+  const itemRowHtml = (item = {}) => `
+    <div class="row" data-mn-item style="margin-top:6px;flex-wrap:nowrap">
+      <input data-mn-iname placeholder="Item — e.g. Chicken Schnitzel" value="${esc(item.name || '')}" style="flex:2;min-width:140px">
+      <input data-mn-idesc placeholder="Description (optional)" value="${esc(item.desc || '')}" style="flex:3;min-width:120px">
+      <input data-mn-iprice type="number" step="0.5" placeholder="$" value="${item.price ?? ''}" style="width:84px">
+      <label style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap">
+        <input type="checkbox" data-mn-isold ${item.sold_out ? 'checked' : ''}>sold out</label>
+      <button class="btn small danger" data-mn-delitem>✕</button>
+    </div>`;
+
+  const sectionHtml = (section = { title: '', items: [{}] }) => `
+    <div data-mn-section style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px">
+      <div class="row">
+        <input data-mn-title placeholder="Section — e.g. Mains" value="${esc(section.title || '')}" style="font-weight:700;max-width:260px">
+        <div class="spacer"></div>
+        <button class="btn small secondary" data-mn-additem>+ item</button>
+        <button class="btn small danger" data-mn-delsection>remove section</button>
+      </div>
+      ${(section.items && section.items.length ? section.items : [{}]).map(itemRowHtml).join('')}
+    </div>`;
+
+  async function renderMenus() {
+    const { menus } = await api('GET', `/api/venues/${venueId}/menus`);
+
+    $('#tab-menus').innerHTML = `
+      <h2>Menu boards</h2>
+      <p class="muted">Design menus here — each one appears in <b>Content</b> as a "<i>name</i> board" ready to tick onto
+      playlists like any graphic. Every save (and every sold-out tick) updates the screens within a second.</p>
+      <div class="row" style="margin-bottom:6px">
+        <input id="mn-new-name" placeholder="New menu — e.g. Bistro Dinner" style="max-width:260px">
+        <button class="btn" id="mn-create">Create menu</button>
+      </div>
+      ${menus.map((menu) => `
+        <div class="card" data-mn-card="${menu.id}">
+          <div class="row">
+            <input data-mn-name value="${esc(menu.name)}" style="font-weight:800;font-size:16px;max-width:280px">
+            <span class="muted">updated ${new Date(menu.updated_at).toLocaleString()}</span>
+            <div class="spacer"></div>
+            <button class="btn" data-mn-save>Save to screens</button>
+            <button class="btn small secondary" data-mn-addsection>+ section</button>
+            <button class="btn small danger" data-mn-delete>Delete menu</button>
+          </div>
+          <div data-mn-sections>${menu.sections.map(sectionHtml).join('')}</div>
+        </div>`).join('') || ''}`;
+
+    $('#mn-create').onclick = async () => {
+      const name = $('#mn-new-name').value.trim();
+      if (!name) return alert('Give the menu a name — e.g. Bistro Dinner');
+      await api('POST', `/api/venues/${venueId}/menus`, { name, sections: [{ title: 'Mains', items: [] }] });
+      render();
+    };
+
+    $('#tab-menus').onclick = async (e) => {
+      const card = e.target.closest('[data-mn-card]');
+      if (!card) return;
+      const menuId = card.dataset.mnCard;
+      if (e.target.closest('[data-mn-save]')) {
+        await api('PATCH', `/api/menus/${menuId}`, menuFromDom(card));
+        e.target.textContent = '✓ Saved';
+        setTimeout(() => { render(); }, 900);
+      } else if (e.target.closest('[data-mn-addsection]')) {
+        card.querySelector('[data-mn-sections]').insertAdjacentHTML('beforeend', sectionHtml());
+      } else if (e.target.closest('[data-mn-additem]')) {
+        e.target.closest('[data-mn-section]').insertAdjacentHTML('beforeend', itemRowHtml());
+      } else if (e.target.closest('[data-mn-delitem]')) {
+        e.target.closest('[data-mn-item]').remove();
+      } else if (e.target.closest('[data-mn-delsection]')) {
+        if (confirm('Remove this whole section?')) e.target.closest('[data-mn-section]').remove();
+      } else if (e.target.closest('[data-mn-delete]')) {
+        if (confirm('Delete this menu? Its board is removed from Content and any playlists.')) {
+          await api('DELETE', `/api/menus/${menuId}`);
+          render();
+        }
+      }
+    };
+
+    // Sold-out ticks save immediately — the mid-service use case.
+    $('#tab-menus').onchange = async (e) => {
+      if (!e.target.matches('[data-mn-isold]')) return;
+      const card = e.target.closest('[data-mn-card]');
+      await api('PATCH', `/api/menus/${card.dataset.mnCard}`, menuFromDom(card));
+    };
+  }
+
   // ---- playlists --------------------------------------------------------------------
 
   async function renderPlaylists() {
@@ -760,6 +891,14 @@
 
   // ---- schedules ---------------------------------------------------------------------
 
+  let calMonthOffset = 0;
+  let timelineDay = new Date().getDay();
+
+  function scheduleColor(i) {
+    const palette = ['#38bdf8', '#a78bfa', '#f472b6', '#fbbf24', '#34d399', '#fb923c', '#60a5fa', '#e879f9'];
+    return palette[i % palette.length];
+  }
+
   async function renderSchedules() {
     const [{ schedules }, { playlists }, { screens }] = await Promise.all([
       api('GET', `/api/venues/${venueId}/schedules`),
@@ -767,8 +906,80 @@
       api('GET', `/api/venues/${venueId}/screens`),
     ]);
     const zones = venue().zones || [];
+    const colorOf = new Map(schedules.map((s, i) => [s.id, scheduleColor(i)]));
+    const toMin = (t) => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+
+    // ---- day timeline: bars on a 24h axis for the picked weekday ----
+    const dayScheds = schedules.filter((s) => {
+      if (!s.active) return false;
+      let days; try { days = JSON.parse(s.days_of_week); } catch { days = []; }
+      return !days.length || days.includes(timelineDay);
+    });
+    const bar = (s, startMin, endMin) => `
+      <div title="${esc(s.name || s.playlist_name)} ${esc(s.start_time)}–${esc(s.end_time)}"
+        style="position:absolute;left:${(startMin / 1440 * 100).toFixed(2)}%;width:${Math.max(0.6, (endMin - startMin) / 1440 * 100).toFixed(2)}%;
+        top:3px;bottom:3px;background:${colorOf.get(s.id)}cc;border-radius:4px;overflow:hidden;white-space:nowrap;
+        font-size:11px;font-weight:700;color:#04202e;padding:2px 6px">${esc(s.name || s.playlist_name)}</div>`;
+    const timelineRows = dayScheds.map((s) => {
+      const start = toMin(s.start_time), end = toMin(s.end_time) || 1440;
+      const bars = end > start || end === start ? bar(s, start, end === start ? 1440 : end)
+        : bar(s, start, 1440) + bar(s, 0, end); // wraps midnight
+      const target = s.screen_name ? esc(s.screen_name) : s.zone_name ? esc(s.zone_name) : 'Venue';
+      return `<div class="row" style="gap:8px;margin-top:4px;flex-wrap:nowrap">
+        <div class="muted" style="width:130px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right">${target}${(s.start_date || s.end_date) ? ' 📅' : ''}</div>
+        <div style="position:relative;flex:1;height:26px;background:var(--panel2);border-radius:4px">${bars}</div>
+      </div>`;
+    }).join('');
+    const hourMarks = [0, 6, 12, 18, 24].map((h) =>
+      `<span style="position:absolute;left:${h / 24 * 100}%;transform:translateX(-50%)">${h === 24 ? '12am' : h === 0 ? '12am' : h === 12 ? '12pm' : h < 12 ? h + 'am' : (h - 12) + 'pm'}</span>`).join('');
+
+    // ---- month grid: dated campaigns ----
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth() + calMonthOffset, 1);
+    const monthLabel = monthStart.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+    const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+    const firstDow = monthStart.getDay();
+    const dated = schedules.filter((s) => s.active && (s.start_date || s.end_date));
+    const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const todayIso = iso(new Date());
+    let cells = '';
+    for (let i = 0; i < firstDow; i++) cells += '<div></div>';
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateIso = iso(new Date(monthStart.getFullYear(), monthStart.getMonth(), day));
+      const hits = dated.filter((s) => (!s.start_date || dateIso >= s.start_date) && (!s.end_date || dateIso <= s.end_date));
+      cells += `<div style="min-height:52px;background:var(--panel2);border-radius:5px;padding:3px 5px;${dateIso === todayIso ? 'outline:2px solid var(--accent)' : ''}">
+        <div class="muted" style="font-size:10px">${day}</div>
+        ${hits.slice(0, 3).map((s) => `<div title="${esc(s.name || s.playlist_name)}" style="font-size:9.5px;font-weight:700;color:#04202e;background:${colorOf.get(s.id)};border-radius:3px;padding:0 4px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.name || s.playlist_name)}</div>`).join('')}
+        ${hits.length > 3 ? `<div class="muted" style="font-size:9px">+${hits.length - 3} more</div>` : ''}
+      </div>`;
+    }
 
     $('#tab-schedules').innerHTML = `
+      <h2>Today's rhythm
+        <span style="font-weight:400;font-size:13px;margin-left:8px">
+          ${DAY_NAMES.map((d, i) => `<button class="btn small ${i === timelineDay ? '' : 'secondary'}" data-tlday="${i}" style="padding:2px 8px">${d}</button>`).join(' ')}
+        </span>
+      </h2>
+      <div class="card">
+        ${timelineRows || '<div class="muted">Nothing scheduled for this day.</div>'}
+        <div class="muted" style="position:relative;height:16px;margin-top:6px;margin-left:138px;font-size:10px">${hourMarks}</div>
+      </div>
+
+      <h2>Calendar — dated campaigns
+        <span style="font-weight:400;font-size:13px;margin-left:8px">
+          <button class="btn small secondary" data-calnav="-1">‹</button>
+          <b style="display:inline-block;min-width:130px;text-align:center">${monthLabel}</b>
+          <button class="btn small secondary" data-calnav="1">›</button>
+        </span>
+      </h2>
+      <div class="card">
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:11px;color:var(--muted);text-align:center;margin-bottom:4px">
+          ${DAY_NAMES.map((d) => `<div>${d}</div>`).join('')}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">${cells}</div>
+        ${dated.length ? '' : '<p class="muted" style="margin-bottom:0">No dated campaigns this month — schedules with From/To dates show up here.</p>'}
+      </div>
+
       <h2>Schedules (dayparting &amp; calendar)</h2>
       <p class="muted">Most specific target wins: screen &gt; zone &gt; whole venue; a schedule with calendar dates beats
       the everyday loop; then priority. End before start runs past midnight. Leave the dates blank for every-week schedules —
@@ -838,6 +1049,10 @@
       render();
     };
     $('#tab-schedules').onclick = async (e) => {
+      const tlday = e.target.closest('[data-tlday]');
+      if (tlday) { timelineDay = parseInt(tlday.dataset.tlday, 10); return render(); }
+      const calnav = e.target.closest('[data-calnav]');
+      if (calnav) { calMonthOffset += parseInt(calnav.dataset.calnav, 10); return render(); }
       const el = e.target.closest('[data-act]');
       if (!el) return;
       if (el.dataset.act === 'del') {
