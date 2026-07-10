@@ -250,7 +250,7 @@ route('POST', '/api/venues/:venueId/screens', async (req, res, params) => {
 const ROTATIONS = new Set([0, 90, 180, 270]);
 const SCREEN_CHANNELS = new Set(['main', 'racing1', 'racing2', 'racing3', 'racing-results', 'sports']);
 const LAYOUTS = new Set(['full', 'side', 'ticker', 'side-ticker']);
-const LICENSES = new Set(['main', 'basic']);
+const LICENSES = new Set(['main', 'basic', 'comp']); // comp = full features, $0 (superadmin-set)
 
 route('PATCH', '/api/screens/:id', async (req, res, params) => {
   const screen = mustFind(db.get('SELECT * FROM screens WHERE id = ?', params.id), 'screen');
@@ -279,7 +279,11 @@ route('PATCH', '/api/screens/:id', async (req, res, params) => {
   // channel back to main; putting a channel on a basic screen needs an upgrade.
   let license = screen.license || 'main';
   if (body.license !== undefined) {
-    if (!LICENSES.has(body.license)) throw new HttpError(400, 'license must be main or basic');
+    if (!LICENSES.has(body.license)) throw new HttpError(400, 'license must be main, basic or comp');
+    // Comped (free, full-featured) licences are a provider decision only.
+    if ((body.license === 'comp' || screen.license === 'comp') && req.user.role !== 'superadmin') {
+      throw new HttpError(403, 'comped licences are set by your signage provider');
+    }
     license = body.license;
   }
   let channel = body.channel ?? screen.channel ?? 'main';
@@ -726,39 +730,76 @@ function licensePrices() {
   } catch { return { ...DEFAULT_PRICES }; }
 }
 
+// A business pays its negotiated rate where one is set, else the standard.
+function pricesFor(org, standard = licensePrices()) {
+  return {
+    main: Number.isFinite(org?.price_main) ? org.price_main : standard.main,
+    basic: Number.isFinite(org?.price_basic) ? org.price_basic : standard.basic,
+  };
+}
+
+function billingSettings() {
+  const rate = parseFloat(db.getSetting('billing_gst_rate'));
+  return {
+    gst_rate: Number.isFinite(rate) ? rate : 10, // AU default; 0 if prices are GST-inclusive
+    company: db.getSetting('billing_company') || '',
+  };
+}
+
 route('GET', '/api/billing', (req, res) => {
   auth.requireRole(req.user, 'admin'); // org admins see their own bill
-  const prices = licensePrices();
+  const standard = licensePrices();
   const orgs = req.user.role === 'superadmin'
     ? db.all('SELECT * FROM orgs ORDER BY name')
     : db.all('SELECT * FROM orgs WHERE id = ?', req.user.org_id ?? '');
 
   const businesses = orgs.map((org) => {
+    const prices = pricesFor(org, standard);
+    const suspended = org.status === 'suspended';
     const venues = db.all('SELECT * FROM venues WHERE org_id = ? ORDER BY name', org.id).map((v) => {
       const screens = db.all('SELECT license, device_key FROM screens WHERE venue_id = ?', v.id);
       const paired = screens.filter((s) => s.device_key);
       const main = paired.filter((s) => (s.license || 'main') === 'main').length;
-      const basic = paired.length - main;
+      const comp = paired.filter((s) => s.license === 'comp').length;
+      const basic = paired.length - main - comp;
       return {
-        id: v.id, name: v.name, main, basic,
+        id: v.id, name: v.name, main, basic, comp,
         unpaired: screens.length - paired.length,
-        monthly: main * prices.main + basic * prices.basic,
+        monthly: suspended ? 0 : main * prices.main + basic * prices.basic,
       };
     });
     const main = venues.reduce((n, v) => n + v.main, 0);
     const basic = venues.reduce((n, v) => n + v.basic, 0);
+    const comp = venues.reduce((n, v) => n + v.comp, 0);
     return {
-      id: org.id, name: org.name, venues, main, basic,
+      id: org.id, name: org.name, venues, main, basic, comp,
+      status: org.status || 'active',
+      custom_pricing: Number.isFinite(org.price_main) || Number.isFinite(org.price_basic),
+      prices,
       unpaired: venues.reduce((n, v) => n + v.unpaired, 0),
-      monthly: main * prices.main + basic * prices.basic,
+      monthly: suspended ? 0 : main * prices.main + basic * prices.basic,
     };
   });
 
   sendJson(res, 200, {
-    prices,
+    prices: standard,
+    settings: billingSettings(),
     businesses,
     total_monthly: businesses.reduce((n, b) => n + b.monthly, 0),
   });
+});
+
+// GST + the company/payment block printed on every invoice.
+route('PATCH', '/api/billing/settings', async (req, res) => {
+  auth.requireRole(req.user, 'superadmin');
+  const body = await readJson(req);
+  if (body.gst_rate !== undefined) {
+    const n = Number(body.gst_rate);
+    if (!Number.isFinite(n) || n < 0 || n > 50) throw new HttpError(400, 'gst_rate must be 0-50');
+    db.setSetting('billing_gst_rate', String(n));
+  }
+  if (body.company !== undefined) db.setSetting('billing_company', String(body.company).slice(0, 1000));
+  sendJson(res, 200, { settings: billingSettings() });
 });
 
 route('PATCH', '/api/billing/prices', async (req, res) => {
@@ -781,17 +822,19 @@ route('PATCH', '/api/billing/prices', async (req, res) => {
 // ---- invoices ---------------------------------------------------------------
 
 // Snapshot one business's current billable screens into invoice lines.
-function invoiceLines(orgId, prices) {
+function invoiceLines(org) {
+  const prices = pricesFor(org);
   const lines = [];
-  for (const v of db.all('SELECT * FROM venues WHERE org_id = ? ORDER BY name', orgId)) {
+  for (const v of db.all('SELECT * FROM venues WHERE org_id = ? ORDER BY name', org.id)) {
     const paired = db.all('SELECT license FROM screens WHERE venue_id = ? AND device_key IS NOT NULL', v.id);
     const main = paired.filter((s) => (s.license || 'main') === 'main').length;
-    const basic = paired.length - main;
-    if (!main && !basic) continue;
+    const comp = paired.filter((s) => s.license === 'comp').length;
+    const basic = paired.length - main - comp;
+    if (!main && !basic && !comp) continue;
     lines.push({
-      venue: v.name, main, basic,
+      venue: v.name, main, basic, comp,
       main_price: prices.main, basic_price: prices.basic,
-      total: main * prices.main + basic * prices.basic,
+      total: main * prices.main + basic * prices.basic, // comped screens are $0
     });
   }
   return lines;
@@ -802,17 +845,19 @@ function invoiceLines(orgId, prices) {
 // month no matter how often this runs. Called monthly by the monitor and
 // on demand from the billing panel.
 function generateInvoices(period, actor = 'system') {
-  const prices = licensePrices();
+  const { gst_rate } = billingSettings();
   const created = [];
   for (const org of db.all('SELECT * FROM orgs')) {
+    if (org.status === 'suspended') continue; // billing pauses while suspended
     if (db.get('SELECT id FROM invoices WHERE org_id = ? AND period = ?', org.id, period)) continue;
-    const lines = invoiceLines(org.id, prices);
-    if (!lines.length) continue; // nothing billable — no invoice
-    const total = lines.reduce((n, l) => n + l.total, 0);
+    const lines = invoiceLines(org);
+    const subtotal = lines.reduce((n, l) => n + l.total, 0);
+    if (!subtotal) continue; // nothing billable — no invoice
+    const gst = Math.round(subtotal * gst_rate) / 100; // gst_rate is a percentage
     const invoiceId = db.id();
-    db.run('INSERT INTO invoices (id, org_id, period, lines, total, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      invoiceId, org.id, period, JSON.stringify(lines), total, db.now());
-    db.logEvent('billing.invoice', { detail: `${org.name} ${period}: $${total}`, actor });
+    db.run('INSERT INTO invoices (id, org_id, period, lines, total, gst, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      invoiceId, org.id, period, JSON.stringify(lines), subtotal + gst, gst, db.now());
+    db.logEvent('billing.invoice', { detail: `${org.name} ${period}: $${subtotal + gst}${gst ? ` (incl $${gst} GST)` : ''}`, actor });
     created.push(invoiceId);
   }
   return created;
@@ -874,23 +919,27 @@ route('POST', '/api/billing/invoices/:id/send', async (req, res, params) => {
   if (!mailer.configured()) throw new HttpError(503, 'email is not set up on this server yet (SMTP_HOST/MAIL_FROM)');
   if (!inv.org_email) throw new HttpError(400, 'this business has no billing email — set one on the Businesses tab');
   const money = (n) => '$' + Number(n).toFixed(2).replace(/\.00$/, '');
+  const subtotal = inv.total - (inv.gst || 0);
+  const company = billingSettings().company;
   const rows = inv.lines.map((l) => `<tr>
       <td style="padding:6px 10px 6px 0">${l.venue}</td>
-      <td style="padding:6px 10px;text-align:right">${l.main} × ${money(l.main_price)}</td>
+      <td style="padding:6px 10px;text-align:right">${l.main} × ${money(l.main_price)}${l.comp ? ` (+${l.comp} comped)` : ''}</td>
       <td style="padding:6px 10px;text-align:right">${l.basic} × ${money(l.basic_price)}</td>
       <td style="padding:6px 0 6px 10px;text-align:right;font-weight:700">${money(l.total)}</td>
     </tr>`).join('');
   const result = await mailer.sendMail({
     to: inv.org_email,
     subject: `${mailer.BRAND} — screen licences for ${inv.period} (${money(inv.total)})`,
-    html: mailer.template(`Invoice — ${inv.period}`,
+    html: mailer.template(`Tax invoice — ${inv.period}`,
       `<p>Screen licences for <b>${inv.org_name}</b>, period <b>${inv.period}</b>.</p>
       <table style="width:100%;border-collapse:collapse;font-size:13px">
         <tr style="opacity:.7"><td></td><td style="text-align:right">Main</td><td style="text-align:right">Basic</td><td style="text-align:right">Total</td></tr>
         ${rows}
-        <tr><td colspan="3" style="padding-top:10px;font-weight:700">Total due</td>
+        ${inv.gst ? `<tr><td colspan="3" style="padding-top:8px">Subtotal</td><td style="padding-top:8px;text-align:right">${money(subtotal)}</td></tr>
+        <tr><td colspan="3">GST</td><td style="text-align:right">${money(inv.gst)}</td></tr>` : ''}
+        <tr><td colspan="3" style="padding-top:10px;font-weight:700">Total due${inv.gst ? ' (incl. GST)' : ''}</td>
         <td style="padding-top:10px;text-align:right;font-weight:800;font-size:16px">${money(inv.total)}</td></tr>
-      </table>`),
+      </table>` + (company ? `<p style="white-space:pre-line;font-size:12px;opacity:.8;margin-top:16px">${company.replace(/</g, '&lt;')}</p>` : '')),
   });
   if (result.ok === false) throw new HttpError(502, 'email failed to send: ' + result.error);
   db.run("UPDATE invoices SET status = CASE WHEN status = 'paid' THEN 'paid' ELSE 'sent' END, sent_at = ? WHERE id = ?", db.now(), inv.id);
@@ -925,11 +974,14 @@ route('GET', '/api/billing/invoices/:id/print', (req, res, params) => {
   Period: <b>${esc(inv.period)}</b> · Issued: ${new Date(inv.created_at).toLocaleDateString('en-AU')}</p>
   <table><tr><th>Venue</th><th class="num">Main screens</th><th class="num">Basic screens</th><th class="num">Amount</th></tr>
   ${inv.lines.map((l) => `<tr><td>${esc(l.venue)}</td>
-    <td class="num">${l.main} × ${money(l.main_price)}</td>
+    <td class="num">${l.main} × ${money(l.main_price)}${l.comp ? ` <span style="color:#888">(+${l.comp} comped)</span>` : ''}</td>
     <td class="num">${l.basic} × ${money(l.basic_price)}</td>
     <td class="num">${money(l.total)}</td></tr>`).join('')}
-  <tr class="total"><td colspan="3">Total due</td><td class="num">${money(inv.total)}</td></tr></table>
-  <p style="color:#666;font-size:13px;margin-top:32px">Generated by ${esc(BRAND)}.</p>
+  ${inv.gst ? `<tr><td colspan="3">Subtotal</td><td class="num">${money(inv.total - inv.gst)}</td></tr>
+  <tr><td colspan="3">GST</td><td class="num">${money(inv.gst)}</td></tr>` : ''}
+  <tr class="total"><td colspan="3">Total due${inv.gst ? ' (incl. GST)' : ''}</td><td class="num">${money(inv.total)}</td></tr></table>
+  ${billingSettings().company ? `<p style="color:#444;font-size:13px;margin-top:28px;white-space:pre-line;border-top:1px solid #ddd;padding-top:14px">${esc(billingSettings().company)}</p>` : ''}
+  <p style="color:#666;font-size:13px;margin-top:20px">Generated by ${esc(BRAND)}.</p>
   <button class="noprint" onclick="print()" style="padding:10px 22px;font-size:15px">Print / save as PDF</button>
   </body></html>`);
 });

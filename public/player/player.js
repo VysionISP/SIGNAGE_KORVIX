@@ -181,6 +181,7 @@
     };
     manifest = next;
     renderStatus();
+    $('suspended').style.display = manifest.suspended ? 'block' : 'none';
     renderSleep();
     renderRotation();
     renderLayout(prevManifestSnapshot);

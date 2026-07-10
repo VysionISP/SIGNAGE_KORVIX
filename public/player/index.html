@@ -158,6 +158,13 @@
   #badgeov .bd-sub { font-size: 2.2vw; opacity: .85; margin-top: 1.5vh; }
   #bd-confetti { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; }
 
+  /* Licence suspended: thin ribbon, content demoted to basic underneath. */
+  #suspended {
+    display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 85;
+    background: #7f1d1d; color: #fecaca; text-align: center; padding: .8vh 2vw;
+    font-size: 1.4vw; font-weight: 700; letter-spacing: .04em;
+  }
+
   /* Overnight sleep: black everything except emergencies (z100). */
   #sleep {
     display: none; position: absolute; inset: 0; background: #000; z-index: 95;
@@ -240,6 +247,8 @@
   </div>
 
   <div id="sleep"><div class="zz" id="sleep-text">SCREENS ASLEEP</div></div>
+
+  <div id="suspended">⚠ Screen licence suspended — contact your signage provider</div>
 
   <div id="emergency">
     <div class="em-level" id="em-level"></div>

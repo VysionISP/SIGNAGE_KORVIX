@@ -185,10 +185,53 @@ route('PATCH', '/api/orgs/:id', async (req, res, params) => {
     auth.requireRole(req.user, 'admin');
   }
   const body = await readJson(req);
-  const alertEmail = body.alert_email === undefined ? org.alert_email
-    : (String(body.alert_email).trim() || null);
-  db.run('UPDATE orgs SET name = ?, alert_email = ? WHERE id = ?',
-    body.name ?? org.name, alertEmail, org.id);
+
+  // Profile fields — editable by the business's own admins too.
+  const text = (v, cur, max = 200) => (v === undefined ? cur : (String(v).trim().slice(0, max) || null));
+  const profile = {
+    name: body.name !== undefined ? (String(body.name).trim() || org.name) : org.name,
+    alert_email: text(body.alert_email, org.alert_email),
+    contact_name: text(body.contact_name, org.contact_name),
+    contact_phone: text(body.contact_phone, org.contact_phone, 40),
+    address: text(body.address, org.address, 300),
+    abn: text(body.abn, org.abn, 20),
+    notes: text(body.notes, org.notes, 2000),
+  };
+
+  // Money + suspension are provider decisions only.
+  let priceMain = org.price_main;
+  let priceBasic = org.price_basic;
+  let status = org.status || 'active';
+  if (body.price_main !== undefined || body.price_basic !== undefined || body.status !== undefined) {
+    auth.requireRole(req.user, 'superadmin');
+    const priceOrNull = (v, cur) => {
+      if (v === undefined) return cur;
+      if (v === null || v === '') return null; // back to standard pricing
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) throw new HttpError(400, 'price must be a non-negative number (or blank for standard)');
+      return Math.round(n * 100) / 100;
+    };
+    priceMain = priceOrNull(body.price_main, priceMain);
+    priceBasic = priceOrNull(body.price_basic, priceBasic);
+    if (body.status !== undefined) {
+      if (!['active', 'suspended'].includes(body.status)) throw new HttpError(400, 'status must be active or suspended');
+      if (body.status !== status) {
+        db.logEvent(body.status === 'suspended' ? 'org.suspended' : 'org.reactivated',
+          { detail: org.name, actor: actorOf(req) });
+      }
+      status = body.status;
+    }
+  }
+
+  db.run(`UPDATE orgs SET name = ?, alert_email = ?, contact_name = ?, contact_phone = ?,
+      address = ?, abn = ?, notes = ?, price_main = ?, price_basic = ?, status = ? WHERE id = ?`,
+    profile.name, profile.alert_email, profile.contact_name, profile.contact_phone,
+    profile.address, profile.abn, profile.notes, priceMain, priceBasic, status, org.id);
+  if (body.status !== undefined) {
+    // Suspension changes what every screen may show — update them now.
+    const { nudgeAll } = require('./admin');
+    nudgeAll();
+  }
   sendJson(res, 200, db.get('SELECT * FROM orgs WHERE id = ?', org.id));
 });
 

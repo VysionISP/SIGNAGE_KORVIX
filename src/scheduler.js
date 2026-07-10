@@ -200,10 +200,14 @@ function buildManifest(screen) {
   const draw = activeDraw(screen);
   const game = cashking.currentGame(screen.venue_id);
   // Licence enforcement: 'basic' screens play scheduled content only — no
-  // game takeovers, no dedicated racing/sports channels. Menu-board channels
+  // game takeovers, no dedicated racing/sports channels ('comp' = a free
+  // full licence). A suspended business drops every screen to basic
+  // behaviour and the player shows a licence ribbon. Menu-board channels
   // are plain content, so any licence gets them; emergencies always show
   // (safety is not a billing tier).
-  const isMainLicense = (screen.license || 'main') === 'main';
+  const org = venue.org_id ? db.get('SELECT status FROM orgs WHERE id = ?', venue.org_id) : null;
+  const suspended = org?.status === 'suspended';
+  const isMainLicense = !suspended && ['main', 'comp'].includes(screen.license || 'main');
   const isMenuChannel = String(screen.channel || '').startsWith('menu:');
 
   const dedicated = (isMainLicense || isMenuChannel) ? channelPlaylist(screen.channel) : null;
@@ -222,6 +226,7 @@ function buildManifest(screen) {
     generated_at: db.now(),
     refresh_seconds: 60,
     brand: BRAND,
+    suspended,
     screen: {
       id: screen.id,
       name: screen.name,

@@ -312,6 +312,15 @@ Screens tab:
   Game takeovers and premium channels never reach a basic screen (emergency
   broadcasts always do — safety is not a billing tier).
 
+Licensing is a full system: three tiers per screen (**Main** — everything;
+**Basic** — ads/menus only; **Comped** — full features, $0, settable only by
+the superadmin), **negotiated per-business rates** that override the standard
+prices, and **suspension** — one switch drops a business's screens to basic
+content with a licence ribbon, stops games/channels, and pauses invoicing
+until reactivated. Every business carries an editable profile (contact,
+phone, address, ABN, internal notes) and invoices are real tax invoices with
+a configurable GST line and your company/payment block.
+
 The **billing console** at `/billing/` is the superadmin's money platform —
 nothing but billing: per-screen prices, live usage by business and venue,
 monthly revenue / outstanding / collected KPIs, and the invoice book. Invoices

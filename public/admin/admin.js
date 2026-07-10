@@ -369,10 +369,13 @@
           <tr>
             <td>${esc(s.name)} <span class="muted">${s.orientation}</span></td>
             <td class="muted">${esc(zoneName(s.zone_id))}</td>
-            <td><select data-license="${s.id}" title="Billing tier — Main includes game takeovers and racing/sports channels">
+            <td>${s.license === 'comp' && !hasRole('superadmin')
+              ? '<span class="pill online" title="Comped by your signage provider">Comped — free</span>'
+              : `<select data-license="${s.id}" title="Billing tier — Main includes game takeovers and racing/sports channels">
               <option value="main" ${(s.license || 'main') === 'main' ? 'selected' : ''}>Main — full</option>
               <option value="basic" ${s.license === 'basic' ? 'selected' : ''}>Basic — ads only</option>
-            </select></td>
+              ${hasRole('superadmin') ? `<option value="comp" ${s.license === 'comp' ? 'selected' : ''}>Comped — free</option>` : ''}
+            </select>`}</td>
             <td><select data-channel="${s.id}">
               ${[['main', 'Main (playlists)'], ['racing1', 'Racing — Next To Go'], ['racing2', 'Racing — 2nd race'],
                  ['racing3', 'Racing — 3rd race'], ['racing-results', 'Racing — Results'], ['sports', 'Sports']]

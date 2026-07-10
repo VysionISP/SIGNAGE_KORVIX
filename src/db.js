@@ -327,6 +327,29 @@ function migrate() {
     // Screen offline/recovery alerts go here per business (when email is configured).
     db.exec('ALTER TABLE orgs ADD COLUMN alert_email TEXT');
   }
+  if (!orgCols.includes('price_main')) {
+    // Negotiated per-business licence rates; NULL = the standard price.
+    db.exec('ALTER TABLE orgs ADD COLUMN price_main REAL');
+    db.exec('ALTER TABLE orgs ADD COLUMN price_basic REAL');
+  }
+  if (!orgCols.includes('contact_name')) {
+    // Customer profile: who to call, where they are, tax id, account notes.
+    db.exec('ALTER TABLE orgs ADD COLUMN contact_name TEXT');
+    db.exec('ALTER TABLE orgs ADD COLUMN contact_phone TEXT');
+    db.exec('ALTER TABLE orgs ADD COLUMN address TEXT');
+    db.exec('ALTER TABLE orgs ADD COLUMN abn TEXT');
+    db.exec('ALTER TABLE orgs ADD COLUMN notes TEXT');
+  }
+  if (!orgCols.includes('status')) {
+    // active | suspended. Suspended: screens play basic content with a
+    // licence ribbon, games/channels stop, invoicing pauses.
+    db.exec("ALTER TABLE orgs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+  }
+  const invCols = db.prepare('PRAGMA table_info(invoices)').all().map((c) => c.name);
+  if (invCols.length && !invCols.includes('gst')) {
+    // GST captured per invoice at generation time (total includes it).
+    db.exec('ALTER TABLE invoices ADD COLUMN gst REAL NOT NULL DEFAULT 0');
+  }
   const mediaCols0 = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
   if (!mediaCols0.includes('expires_at')) {
     // Self-expiring media (e.g. tonight's-special photos posted from the console).

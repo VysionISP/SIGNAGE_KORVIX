@@ -79,7 +79,8 @@
     if (Date.now() < holdRenderUntil) return;
     // Don't clobber a form the user is typing into (5s poll re-renders).
     const active = document.activeElement;
-    if (active && $('views').contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) return;
+    if (active && $('views').contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)
+      && active.type !== 'file' && active.type !== 'checkbox') return;
 
     $('venue-name').textContent = state.venue.name;
     if (state.brand) {
@@ -397,6 +398,7 @@
   document.body.addEventListener('change', (e) => {
     if (e.target.id === 'ph-file' && e.target.files && e.target.files[0]) {
       photoForm.file = e.target.files[0];
+      e.target.blur();
       render();
     }
     if (e.target.id === 'ph-playlist') photoForm.playlist = e.target.value;
@@ -533,13 +535,27 @@
         if (!photoForm.file) { flashError('Choose a photo first.'); busy = false; return; }
         if (!photoForm.playlist) { flashError('Pick which playlist it should appear in.'); busy = false; return; }
         phSend.textContent = 'Sending…';
+        // Re-encode to JPEG on the tablet: converts iPhone HEIC (which TVs
+        // can't show), downsizes 10 MB camera shots, and bakes in rotation.
+        let upload = photoForm.file;
+        let uploadName = photoForm.file.name || 'photo.jpg';
+        try {
+          const img = await createImageBitmap(photoForm.file);
+          const scale = Math.min(1, 1920 / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.88));
+          if (blob) { upload = blob; uploadName = 'photo.jpg'; }
+        } catch { /* undecodable here — send as-is and let the server decide */ }
         const q = new URLSearchParams({
-          name: photoForm.file.name || 'photo.jpg',
+          name: uploadName,
           playlist_id: photoForm.playlist,
           hours: photoForm.hours,
           label: photoForm.label,
         });
-        const resp = await fetch(`/api/remote/${token}/photo?${q}`, { method: 'POST', body: photoForm.file });
+        const resp = await fetch(`/api/remote/${token}/photo?${q}`, { method: 'POST', body: upload });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) throw new Error(data.error || `upload failed (${resp.status})`);
         photoForm.file = null;

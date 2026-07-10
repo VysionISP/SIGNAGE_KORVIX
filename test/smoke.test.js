@@ -1434,6 +1434,7 @@ test('billing invoices: generate, snapshot, lifecycle, scoping', async (t) => {
       await api('PATCH', `/api/screens/${s.data.id}`, { license });
     }
     await api('PATCH', '/api/billing/prices', { main: 50, basic: 20 });
+    await api('PATCH', '/api/billing/settings', { gst_rate: 10 }); // pin GST for the math below
     const user = await api('POST', '/api/users', {
       email: 'admin@invoicearms.au', password: 'invoice-pass-1', role: 'admin', org_id: orgId,
     });
@@ -1454,7 +1455,8 @@ test('billing invoices: generate, snapshot, lifecycle, scoping', async (t) => {
     assert.ok(inv, 'invoice exists');
     invoiceId = inv.id;
     assert.strictEqual(inv.status, 'draft');
-    assert.strictEqual(inv.total, 70); // 1×$50 + 1×$20
+    assert.strictEqual(inv.total, 77); // (1×$50 + 1×$20) + 10% GST
+    assert.strictEqual(inv.gst, 7);
     const line = inv.lines.find((l) => l.venue === 'Invoice Arms');
     assert.deepStrictEqual(
       { main: line.main, basic: line.basic, total: line.total },
@@ -1464,7 +1466,7 @@ test('billing invoices: generate, snapshot, lifecycle, scoping', async (t) => {
   await t.test('issued invoices are snapshots — later price changes leave them alone', async () => {
     await api('PATCH', '/api/billing/prices', { main: 99, basic: 99 });
     const inv = (await api('GET', '/api/billing/invoices')).data.invoices.find((i) => i.id === invoiceId);
-    assert.strictEqual(inv.total, 70);
+    assert.strictEqual(inv.total, 77);
     await api('PATCH', '/api/billing/prices', { main: 50, basic: 20 }); // restore
   });
 
@@ -1478,7 +1480,8 @@ test('billing invoices: generate, snapshot, lifecycle, scoping', async (t) => {
     assert.strictEqual(print.status, 200);
     const html = await print.text();
     assert.match(html, /Invoice Test Group/);
-    assert.match(html, /\$70/);
+    assert.match(html, /GST/);
+    assert.match(html, /\$77/);
 
     // emailing without SMTP explains itself
     const send = await api('POST', `/api/billing/invoices/${invoiceId}/send`);
@@ -1506,5 +1509,124 @@ test('billing invoices: generate, snapshot, lifecycle, scoping', async (t) => {
     assert.strictEqual(del.status, 200);
     const regen = await api('POST', '/api/billing/invoices/generate', { period: '2026-07' });
     assert.ok(regen.data.created >= 1);
+  });
+});
+
+// ---- Licensing v2: profiles, custom rates, comped screens, suspension ---------------
+
+test('licensing v2: business profile, negotiated rates, comp, suspension', async (t) => {
+  const db = require('../src/db');
+  let orgId, venueId, screenId, deviceKey, adminTok;
+
+  await t.test('setup', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'V2 Hotel Group' });
+    orgId = org.data.id;
+    const venue = await api('POST', '/api/venues', { name: 'V2 Hotel', org_id: orgId });
+    venueId = venue.data.id;
+    const screen = await api('POST', `/api/venues/${venueId}/screens`, { name: 'Front Bar' });
+    screenId = screen.data.id;
+    const hello = await api('POST', '/api/player/hello', {});
+    deviceKey = hello.data.device_key;
+    await api('POST', `/api/screens/${screenId}/pair`, { pairing_code: hello.data.pairing_code });
+    await api('POST', '/api/users', { email: 'admin@v2hotel.au', password: 'v2-password-1', role: 'admin', org_id: orgId });
+    adminTok = (await api('POST', '/api/auth/login', { email: 'admin@v2hotel.au', password: 'v2-password-1' })).data.token;
+  });
+
+  await t.test('business profile fields persist; org admin can edit own profile', async () => {
+    const set = await api('PATCH', `/api/orgs/${orgId}`, {
+      contact_name: 'Dave Owner', contact_phone: '0400 111 222',
+      address: '1 Beer St, Sydney NSW', abn: '12 345 678 901', notes: 'Wants racing next quarter',
+    }, adminTok);
+    assert.strictEqual(set.status, 200);
+    assert.strictEqual(set.data.contact_name, 'Dave Owner');
+    assert.strictEqual(set.data.abn, '12 345 678 901');
+
+    // ...but not the money fields
+    const denied = await api('PATCH', `/api/orgs/${orgId}`, { price_main: 1 }, adminTok);
+    assert.strictEqual(denied.status, 403);
+    const denied2 = await api('PATCH', `/api/orgs/${orgId}`, { status: 'active' }, adminTok);
+    assert.strictEqual(denied2.status, 403);
+  });
+
+  await t.test('negotiated rates flow into billing and invoices', async () => {
+    await api('PATCH', '/api/billing/settings', { gst_rate: 0 }); // simple math
+    await api('PATCH', `/api/orgs/${orgId}`, { price_main: 40 });
+    const bill = await api('GET', '/api/billing');
+    const biz = bill.data.businesses.find((b) => b.id === orgId);
+    assert.strictEqual(biz.custom_pricing, true);
+    assert.strictEqual(biz.prices.main, 40);
+    assert.strictEqual(biz.monthly, 40); // one main screen at the negotiated rate
+
+    await api('POST', '/api/billing/invoices/generate', { period: '2027-01' });
+    const inv = (await api('GET', '/api/billing/invoices')).data.invoices
+      .find((i) => i.org_id === orgId && i.period === '2027-01');
+    assert.strictEqual(inv.total, 40);
+    assert.strictEqual(inv.lines[0].main_price, 40);
+
+    const cleared = await api('PATCH', `/api/orgs/${orgId}`, { price_main: null });
+    assert.strictEqual(cleared.data.price_main, null); // back to standard
+  });
+
+  await t.test('comped screens: free, full-featured, superadmin-only', async () => {
+    const denied = await api('PATCH', `/api/screens/${screenId}`, { license: 'comp' }, adminTok);
+    assert.strictEqual(denied.status, 403);
+
+    const comped = await api('PATCH', `/api/screens/${screenId}`, { license: 'comp' });
+    assert.strictEqual(comped.data.license, 'comp');
+    const bill = await api('GET', '/api/billing');
+    const biz = bill.data.businesses.find((b) => b.id === orgId);
+    assert.strictEqual(biz.comp, 1);
+    assert.strictEqual(biz.monthly, 0);
+
+    // full features: a live draw reaches the comped screen
+    const draw = await api('POST', `/api/venues/${venueId}/draws`, { name: 'Comp Raffle', range_start: 1, range_end: 10 });
+    await api('POST', `/api/draws/${draw.data.id}/draw`);
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.ok(manifest.data.draw, 'takeover reaches comped screen');
+    await api('POST', `/api/draws/${draw.data.id}/clear`);
+
+    // org admin can't quietly change a comped screen either
+    const sneaky = await api('PATCH', `/api/screens/${screenId}`, { license: 'basic' }, adminTok);
+    assert.strictEqual(sneaky.status, 403);
+    await api('PATCH', `/api/screens/${screenId}`, { license: 'main' }); // restore
+  });
+
+  await t.test('suspension: screens demoted + flagged, invoicing pauses', async () => {
+    const draw = await api('POST', `/api/venues/${venueId}/draws`, { name: 'Suspended Raffle', range_start: 1, range_end: 10 });
+    await api('POST', `/api/draws/${draw.data.id}/draw`);
+
+    await api('PATCH', `/api/orgs/${orgId}`, { status: 'suspended' });
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.suspended, true);
+    assert.strictEqual(manifest.data.draw, null, 'takeovers stop while suspended');
+
+    const bill = await api('GET', '/api/billing');
+    const biz = bill.data.businesses.find((b) => b.id === orgId);
+    assert.strictEqual(biz.status, 'suspended');
+    assert.strictEqual(biz.monthly, 0);
+
+    const gen = await api('POST', '/api/billing/invoices/generate', { period: '2027-02' });
+    const inv = (await api('GET', '/api/billing/invoices')).data.invoices
+      .find((i) => i.org_id === orgId && i.period === '2027-02');
+    assert.strictEqual(inv, undefined, 'no invoices drafted while suspended');
+
+    await api('PATCH', `/api/orgs/${orgId}`, { status: 'active' });
+    const back = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(back.data.suspended, false);
+    assert.ok(back.data.draw, 'takeover resumes on reactivation');
+    await api('POST', `/api/draws/${draw.data.id}/clear`);
+    await api('PATCH', '/api/billing/settings', { gst_rate: 10 }); // restore default
+  });
+
+  await t.test('venue management APIs used by the console: create, rename, move, delete', async () => {
+    const v2 = await api('POST', '/api/venues', { name: 'Second Site', org_id: orgId });
+    assert.strictEqual(v2.status, 201);
+    const renamed = await api('PATCH', `/api/venues/${v2.data.id}`, { name: 'Second Site Renamed' });
+    assert.strictEqual(renamed.data.name, 'Second Site Renamed');
+    const org2 = await api('POST', '/api/orgs', { name: 'V2 Other Group' });
+    const moved = await api('PATCH', `/api/venues/${v2.data.id}`, { org_id: org2.data.id });
+    assert.strictEqual(moved.data.org_id, org2.data.id);
+    const del = await api('DELETE', `/api/venues/${v2.data.id}`);
+    assert.strictEqual(del.status, 200);
   });
 });
