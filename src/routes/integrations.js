@@ -34,7 +34,7 @@ route('POST', '/api/integrations/:venueId/:source', async (req, res, params) => 
     `INSERT INTO feeds (venue_id, source, payload, updated_at) VALUES (?, ?, ?, ?)
      ON CONFLICT (venue_id, source) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
     params.venueId, params.source, JSON.stringify(payload), db.now());
-  db.logEvent('feed.updated', { venueId: params.venueId, detail: params.source });
+  db.logEvent('feed.updated', { venueId: params.venueId, detail: params.source, actor: 'Integration' });
   nudgeVenue(params.venueId);
   sendJson(res, 200, { ok: true, source: params.source });
 });

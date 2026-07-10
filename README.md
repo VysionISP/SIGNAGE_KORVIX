@@ -176,7 +176,15 @@ npm test           # end-to-end smoke tests (boots a real server)
 | `video`  | Full-screen muted video; advances when it ends                     |
 | `url`    | Any live web page in a sandboxed iframe                            |
 | `html`   | An inline HTML slide stored in the CMS (no assets needed)          |
-| `widget` | Built-in live-data renderer: `jackpot`, `menu`, `weather`, `sports`, `birthdays`, `happyhour`, `cashking`, `welcome` |
+| `widget` | Built-in live-data renderer: `jackpot`, `menu`, `weather`, `sports`, `birthdays`, `happyhour`, `cashking`, `welcome`, `menuboard:<id>`, `racing:1/2/3/results`, `qr:<url>\|<label>` (QR generated locally, no external service), `countdown:<datetime>\|<label>` (live D/H/M/S) |
+
+The Content tab has one-click **Quick slides** builders for the QR and
+countdown widgets, and staff can push a **photo straight from the games
+console tablet** into any playlist — it self-expires after the chosen hours
+and the file is cleaned up automatically. Venues can also set **screen sleep
+hours** (Settings → Venue) to black out every screen overnight, and any venue
+can be **cloned as a template** (zones, content, menus, playlists, schedules —
+everything but the screens) when rolling out a new site.
 
 ## API sketch
 
@@ -268,6 +276,30 @@ GET  /api/integrations/:venueId           current feeds
 | `KORVIX_ALERT_WEBHOOK` | *(unset = off)*   | URL POSTed screen offline/recovery alerts (Slack/Teams/any JSON) |
 | `KORVIX_OFFLINE_MS`  | `90000`             | Silence before a screen counts as offline |
 | `KORVIX_PLAYS_RETENTION_DAYS` | `90`       | Proof-of-play retention              |
+| `KORVIX_BRAND`       | `Korvix Signage`    | White-label product name — flows to the dashboard, player, games console PWA and every email |
+| `KORVIX_BACKUPS_KEPT`| `14`                | Automated nightly `data/backups/` snapshots to keep |
+| `SMTP_HOST`          | *(unset = email off)* | SMTP server (e.g. `email-smtp.ap-southeast-2.amazonaws.com` for SES, `smtp.resend.com` for Resend) |
+| `SMTP_PORT`          | `587`               | `587` = STARTTLS, `465` = implicit TLS |
+| `SMTP_USER` / `SMTP_PASS` | *(unset)*      | SMTP credentials                     |
+| `MAIL_FROM`          | *(= SMTP_USER)*     | From header, e.g. `Venuecast <no-reply@yourdomain.com.au>` |
+
+### Email (optional, zero dependencies)
+
+Until `SMTP_HOST`/`MAIL_FROM` are set every email feature quietly no-ops — the
+product works fully without them. Once configured you get:
+
+- **Password reset** — "Forgot password?" on the sign-in screen emails a
+  one-hour single-use link; completing it signs the user out everywhere.
+- **Welcome emails** — new users get a branded invite pointing at the dashboard.
+- **Offline alerts per business** — set an alert email on the Businesses tab and
+  that business is emailed when one of its screens drops off (and again on
+  recovery). The `KORVIX_ALERT_WEBHOOK` keeps firing regardless.
+
+### Backups
+
+A `VACUUM INTO` snapshot of the database lands in `data/backups/` once per day
+automatically (newest 14 kept). Superadmins can also download one anytime from
+the Overview tab.
 
 ## Player hardware
 

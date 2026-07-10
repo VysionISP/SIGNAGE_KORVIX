@@ -12,6 +12,8 @@
   let venueId = localStorage.getItem('korvix.venue') || null;
   let activeTab = 'overview';
   let me = null; // current user {id, org_id, org_name, email, name, role}
+  let emailConfigured = false; // SMTP set up server-side (reset/invite/alert emails)
+  let brandName = 'Korvix'; // first word of the server brand (KORVIX_BRAND)
 
   const ROLE_RANK = { viewer: 1, editor: 2, admin: 3, superadmin: 4 };
   const hasRole = (min) => me && ROLE_RANK[me.role] >= ROLE_RANK[min];
@@ -42,13 +44,28 @@
 
   // ---- login / first-run setup ---------------------------------------------------
 
+  // The one-time token from a password-reset email link (/admin/?reset=TOKEN).
+  const resetToken = new URLSearchParams(location.search).get('reset');
+
   function showAuth(mode) {
     $('#auth-overlay').style.display = 'flex';
-    $('#auth-heading').textContent = mode === 'setup'
-      ? 'Welcome! Create the first admin account' : 'Sign in';
+    $('#auth-heading').textContent = {
+      setup: 'Welcome! Create the first admin account',
+      login: 'Sign in',
+      forgot: "We'll email you a reset link",
+      reset: 'Choose a new password',
+    }[mode] || 'Sign in';
     $('#auth-name').style.display = mode === 'setup' ? 'block' : 'none';
-    $('#auth-submit').textContent = mode === 'setup' ? 'Create account' : 'Sign in';
+    $('#auth-email').style.display = mode === 'reset' ? 'none' : 'block';
+    $('#auth-password').style.display = mode === 'forgot' ? 'none' : 'block';
+    $('#auth-password').placeholder = mode === 'reset' ? 'New password (8+ characters)' : 'Password';
+    $('#auth-submit').textContent = {
+      setup: 'Create account', login: 'Sign in',
+      forgot: 'Email me a reset link', reset: 'Set new password',
+    }[mode] || 'Sign in';
     $('#auth-submit').dataset.mode = mode;
+    $('#auth-forgot').textContent = mode === 'login' ? 'Forgot password?' : '← Back to sign in';
+    $('#auth-forgot').style.display = mode === 'setup' ? 'none' : '';
     $('#auth-error').textContent = '';
   }
 
@@ -56,6 +73,35 @@
     const mode = $('#auth-submit').dataset.mode || 'login';
     const email = $('#auth-email').value.trim();
     const password = $('#auth-password').value;
+
+    if (mode === 'forgot') {
+      if (!email) return;
+      const res = await fetch('/api/auth/forgot', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      $('#auth-error').textContent = res.ok
+        ? 'Check your inbox — the link works for 1 hour.'
+        : (data.error || `error ${res.status}`);
+      if (res.ok) $('#auth-error').style.color = '#86efac';
+      return;
+    }
+    if (mode === 'reset') {
+      if (!password) return;
+      const res = await fetch('/api/auth/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetToken, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { $('#auth-error').textContent = data.error || `error ${res.status}`; return; }
+      history.replaceState(null, '', '/admin/'); // drop the used token from the URL
+      showAuth('login');
+      $('#auth-error').style.color = '#86efac';
+      $('#auth-error').textContent = 'Password changed — sign in with it now.';
+      return;
+    }
+
     if (!email || !password) return;
     const res = await fetch(mode === 'setup' ? '/api/auth/setup' : '/api/auth/login', {
       method: 'POST',
@@ -76,6 +122,11 @@
 
   $('#auth-submit').addEventListener('click', submitAuth);
   $('#auth-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
+  $('#auth-forgot').addEventListener('click', (e) => {
+    e.preventDefault();
+    $('#auth-error').style.color = '';
+    showAuth($('#auth-submit').dataset.mode === 'login' ? 'forgot' : 'login');
+  });
 
   $('#logout-btn').addEventListener('click', async () => {
     try { await api('POST', '/api/auth/logout'); } catch { /* session may be dead */ }
@@ -84,7 +135,7 @@
   });
 
   function applyRoleUi() {
-    $('#user-chip').textContent = me ? `${me.name || me.email} · ${me.role}${me.org_name ? ' @ ' + me.org_name : ' @ Korvix'}` : '';
+    $('#user-chip').textContent = me ? `${me.name || me.email} · ${me.role}${me.org_name ? ' @ ' + me.org_name : ' @ ' + brandName}` : '';
     $('#logout-btn').style.display = me && me.id !== '_legacy' ? '' : 'none';
     $('#add-venue-btn').style.display = hasRole('admin') ? '' : 'none';
     renderNav();
@@ -268,7 +319,8 @@
       <table><tbody>
         ${events.slice(0, 12).map((e) => `
           <tr><td class="muted" style="white-space:nowrap">${new Date(e.created_at).toLocaleString()}</td>
-          <td>${esc(e.type)}</td><td class="muted">${esc(e.detail)}</td></tr>`).join('')
+          <td>${esc(e.type)}</td><td class="muted">${esc(e.detail)}</td>
+          <td class="muted" style="white-space:nowrap">${esc(e.actor || '')}</td></tr>`).join('')
           || '<tr><td class="muted">No activity yet</td></tr>'}
       </tbody></table>`;
   }
@@ -552,6 +604,24 @@
         ${media.map(card).join('') || '<div class="muted">Nothing here yet — drop some graphics above.</div>'}
       </div>
 
+      <h2>Quick slides</h2>
+      <div class="cards" style="align-items:stretch">
+        <div class="card" style="margin:0">
+          <h3 style="margin-top:0">📱 QR code slide</h3>
+          <p class="muted" style="font-size:13px">A big scannable code — your menu, booking page, socials or WiFi.</p>
+          <input id="qs-qr-url" placeholder="Link — e.g. https://thevenue.com.au/menu">
+          <input id="qs-qr-label" placeholder="Heading on screen — e.g. Scan for the full menu" style="margin-top:8px">
+          <button class="btn small" id="qs-qr-add" style="margin-top:10px">Add QR slide</button>
+        </div>
+        <div class="card" style="margin:0">
+          <h3 style="margin-top:0">⏳ Countdown slide</h3>
+          <p class="muted" style="font-size:13px">Live countdown to a big moment — NYE, kick-off, the meat raffle.</p>
+          <input id="qs-cd-when" type="datetime-local">
+          <input id="qs-cd-label" placeholder="What it's counting down to — e.g. NRL Grand Final" style="margin-top:8px">
+          <button class="btn small" id="qs-cd-add" style="margin-top:10px">Add countdown slide</button>
+        </div>
+      </div>
+
       <details class="adv">
         <summary>Advanced: add by web address, HTML slide or live widget</summary>
         <div class="card">
@@ -593,6 +663,27 @@
           </tbody>
         </table>
       </details>`;
+
+    const addQuickSlide = async (name, src) => {
+      const created = await api('POST', `/api/venues/${venueId}/media`, {
+        name, type: 'widget', src, duration_seconds: 12,
+      });
+      whereOpen.add(created.id); // straight to "where it plays"
+      render();
+    };
+    $('#qs-qr-add').onclick = () => {
+      let url = $('#qs-qr-url').value.trim();
+      if (!url) return alert('Paste the link the QR code should open.');
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      const label = $('#qs-qr-label').value.trim();
+      addQuickSlide(label || 'QR code slide', `qr:${url}|${label}`);
+    };
+    $('#qs-cd-add').onclick = () => {
+      const when = $('#qs-cd-when').value;
+      if (!when) return alert('Pick the date & time to count down to.');
+      const label = $('#qs-cd-label').value.trim();
+      addQuickSlide(label ? `Countdown — ${label}` : 'Countdown slide', `countdown:${when}|${label}`);
+    };
 
     $('#md-add').onclick = async () => {
       const name = $('#md-name').value.trim();
@@ -1140,7 +1231,7 @@
       <h2>Setting up the tablet</h2>
       <div class="card muted" style="line-height:1.9">
         1. Open the link above in Chrome (Android) or Safari (iPad) on the venue tablet.<br>
-        2. Use <b>Add to Home Screen</b> — it installs as the <b>Korvix Games</b> app: full-screen, own icon.<br>
+        2. Use <b>Add to Home Screen</b> — it installs as the <b>${esc(brandName)} Games</b> app: full-screen, own icon.<br>
         3. Recommended: pin the app (Android: Settings → Security → App pinning) so punters can't wander out of it.<br>
         4. Staff phones can install the same link — every device stays in sync automatically.
       </div>
@@ -1520,6 +1611,29 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
         A PNG with a transparent background looks best.</p>
       </div>
 
+      <h2>Screen sleep hours</h2>
+      <div class="card">
+        <div class="row">
+          <label class="muted">Screens off from <input type="time" id="vs-sleep-start" value="${esc(v.sleep_start || '')}"></label>
+          <label class="muted">back on at <input type="time" id="vs-sleep-end" value="${esc(v.sleep_end || '')}"></label>
+          <button class="btn small" id="vs-sleep-save">Save</button>
+          ${v.sleep_start && v.sleep_end ? '<button class="btn small secondary" id="vs-sleep-clear">Turn off</button>' : ''}
+        </div>
+        <p class="muted" style="margin-bottom:0">Every screen in this venue goes black between these times
+        (venue-local, e.g. 00:00 → 07:00) and wakes up by itself. Emergency broadcasts still show.</p>
+      </div>
+
+      ${hasRole('admin') ? `
+      <h2>Use this venue as a template</h2>
+      <div class="card">
+        <div class="row">
+          <input id="vs-clone-name" placeholder="New venue name — e.g. The Railway Hotel" style="min-width:260px">
+          <button class="btn" id="vs-clone">Create a copy</button>
+        </div>
+        <p class="muted" style="margin-bottom:0">Copies this venue's zones, content library, menus, playlists and
+        schedules into a brand-new venue — then you just pair its screens. Perfect for rolling out a new site.</p>
+      </div>` : ''}
+
       <h2 style="color:var(--bad)">Danger zone</h2>
       <div class="card">
         <div class="row">
@@ -1550,6 +1664,31 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
     const logoRemove = $('#vs-logo-remove');
     if (logoRemove) logoRemove.onclick = async () => {
       await api('PATCH', `/api/venues/${venueId}`, { logo_url: null });
+      await refresh();
+    };
+
+    $('#vs-sleep-save').onclick = async () => {
+      const start = $('#vs-sleep-start').value;
+      const end = $('#vs-sleep-end').value;
+      if (!start || !end) return alert('Set both times (or use Turn off to disable).');
+      await api('PATCH', `/api/venues/${venueId}`, { sleep_start: start, sleep_end: end });
+      await refresh();
+    };
+    const sleepClear = $('#vs-sleep-clear');
+    if (sleepClear) sleepClear.onclick = async () => {
+      await api('PATCH', `/api/venues/${venueId}`, { sleep_start: '', sleep_end: '' });
+      await refresh();
+    };
+
+    const cloneBtn = $('#vs-clone');
+    if (cloneBtn) cloneBtn.onclick = async () => {
+      const name = $('#vs-clone-name').value.trim();
+      if (!name) return alert('Give the new venue a name first.');
+      const created = await api('POST', `/api/venues/${venueId}/clone`, { name });
+      alert(`"${name}" created — copied ${created.cloned.playlists} playlists, ${created.cloned.media} media items, `
+        + `${created.cloned.menus} menus and ${created.cloned.schedules} schedules. Now pair its screens.`);
+      venueId = created.id;
+      localStorage.setItem('korvix.venue', venueId);
       await refresh();
     };
 
@@ -1639,7 +1778,7 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
         <thead><tr>${isSuper ? '<th>Business</th>' : ''}<th>Name</th><th>Email</th><th>Role</th><th>Last login</th><th></th></tr></thead>
         <tbody>${users.map((u) => `
           <tr>
-            ${isSuper ? `<td class="muted">${esc(u.org_name || 'Korvix')}</td>` : ''}
+            ${isSuper ? `<td class="muted">${esc(u.org_name || brandName)}</td>` : ''}
             <td>${esc(u.name)}</td>
             <td>${esc(u.email)}</td>
             <td><select data-role="${u.id}" ${u.id === me.id ? 'disabled' : ''}>
@@ -1659,7 +1798,7 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
       <div class="form-grid card">
         ${isSuper ? `<label>Business<select id="us-org">
           ${orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}
-          <option value="">— Korvix (superadmin) —</option>
+          <option value="">— ${esc(brandName)} (superadmin) —</option>
         </select></label>` : ''}
         <label>Name<input id="us-name" placeholder="Sam the Manager"></label>
         <label>Email<input id="us-email" type="email" placeholder="sam@venue.com.au"></label>
@@ -1723,20 +1862,24 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
         <button class="btn" id="org-add">Create business</button>
       </div>
       <table>
-        <thead><tr><th>Business</th><th>Venues</th><th>Users</th><th>Created</th><th></th></tr></thead>
+        <thead><tr><th>Business</th><th>Venues</th><th>Users</th><th>Alert email</th><th>Created</th><th></th></tr></thead>
         <tbody>${orgs.map((o) => `
           <tr>
             <td>${esc(o.name)}</td>
             <td>${o.venues}</td>
             <td>${o.users}</td>
+            <td><input data-alertmail="${o.id}" type="email" placeholder="alerts@venue.com.au"
+              value="${esc(o.alert_email || '')}" style="min-width:200px"
+              title="Screen offline/recovery alerts are emailed here${emailConfigured ? '' : ' (once the server has SMTP set up)'}"></td>
             <td class="muted">${new Date(o.created_at).toLocaleDateString()}</td>
             <td style="text-align:right;white-space:nowrap">
               <button class="btn small secondary" data-rename="${o.id}" data-name="${esc(o.name)}">Rename</button>
               <button class="btn small danger" data-delorg="${o.id}" ${o.venues ? 'disabled title="Business still has venues"' : ''}>✕</button>
             </td>
-          </tr>`).join('') || '<tr><td class="muted" colspan="5">No businesses yet</td></tr>'}
+          </tr>`).join('') || '<tr><td class="muted" colspan="6">No businesses yet</td></tr>'}
         </tbody>
       </table>
+      ${emailConfigured ? '' : '<p class="muted">✉️ Email sending isn\'t configured on the server yet — alert emails will start flowing once SMTP details are added (they\'re saved here in the meantime).</p>'}
 
       <h2>Which business owns each venue</h2>
       <p class="muted">A user sees every venue in their business — so give each owner their own business and
@@ -1754,6 +1897,11 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
       </table>`;
 
     $('#tab-orgs').onchange = async (e) => {
+      const mail = e.target.closest('[data-alertmail]');
+      if (mail) {
+        await api('PATCH', `/api/orgs/${mail.dataset.alertmail}`, { alert_email: mail.value.trim() });
+        return;
+      }
       const sel = e.target.closest('[data-vorg]');
       if (!sel) return;
       const orgName = orgs.find((o) => o.id === sel.value)?.name || '?';
@@ -1798,9 +1946,25 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
     }, 15000);
   }
 
+  // Rebrand from the server (KORVIX_BRAND env): title, header, login box.
+  function applyBrandUi(brand) {
+    if (!brand) return;
+    document.title = `${brand} — Dashboard`;
+    brandName = brand.split(' ')[0];
+    const words = brand.split(' ');
+    const first = esc(words[0].toUpperCase());
+    const rest = esc(words.slice(1).join(' ').toUpperCase());
+    document.querySelectorAll('.logo').forEach((el) => {
+      el.innerHTML = rest ? `${first} <span>${rest}</span>` : `<span>${first}</span>`;
+    });
+  }
+
   (async () => {
     const state = await (await fetch('/api/auth/state')).json();
+    applyBrandUi(state.brand);
+    emailConfigured = !!state.email_configured;
     if (state.needs_setup) return showAuth('setup');
+    if (resetToken) return showAuth('reset');
     if (!sessionToken()) return showAuth('login');
     try {
       me = (await api('GET', '/api/auth/me')).user;

@@ -11,6 +11,9 @@ const { sendJson, readJson, HttpError, required } = require('../util');
 const { OFFLINE_AFTER_MS } = require('../monitor');
 const auth = require('../auth');
 
+// Audit-trail attribution ('API token' for the legacy env key).
+const actorOf = (req) => req.user?.email || req.user?.name || null;
+
 // Tenant scoping: assertVenue() 404s on venues outside the caller's business
 // and enforces the minimum role. Sub-resources (screens, media, playlists,
 // schedules, draws, emergencies) resolve to their venue first, then assert.
@@ -92,7 +95,11 @@ route('PATCH', '/api/venues/:id', async (req, res, params) => {
     if (!db.get('SELECT id FROM orgs WHERE id = ?', body.org_id ?? '')) throw new HttpError(400, 'unknown business');
     orgId = body.org_id;
   }
-  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, logo_url = ?, latitude = ?, longitude = ?, racing_jurisdiction = ?, org_id = ? WHERE id = ?',
+  // Overnight screen sleep window (venue-local "HH:MM"; both or neither).
+  const hhmm = (v) => (typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v.trim()) ? v.trim() : null);
+  const sleepStart = body.sleep_start !== undefined ? hhmm(body.sleep_start) : venue.sleep_start;
+  const sleepEnd = body.sleep_end !== undefined ? hhmm(body.sleep_end) : venue.sleep_end;
+  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, logo_url = ?, latitude = ?, longitude = ?, racing_jurisdiction = ?, sleep_start = ?, sleep_end = ?, org_id = ? WHERE id = ?',
     body.name ?? venue.name, body.timezone ?? venue.timezone, body.address ?? venue.address,
     body.logo_url !== undefined ? (body.logo_url ? String(body.logo_url).slice(0, 300) : null) : venue.logo_url,
     body.latitude !== undefined ? numOrNull(body.latitude) : venue.latitude,
@@ -100,8 +107,10 @@ route('PATCH', '/api/venues/:id', async (req, res, params) => {
     body.racing_jurisdiction !== undefined
       ? (body.racing_jurisdiction ? String(body.racing_jurisdiction).trim().toUpperCase() : null)
       : venue.racing_jurisdiction,
+    sleepStart, sleepEnd,
     orgId,
     venue.id);
+  if (body.sleep_start !== undefined || body.sleep_end !== undefined) nudgeVenue(venue.id);
   if (body.latitude !== undefined || body.longitude !== undefined) {
     require('../monitor').refreshWeather(); // async, fire-and-forget
   }
@@ -115,6 +124,88 @@ route('DELETE', '/api/venues/:id', (req, res, params) => {
   auth.assertVenue(req.user, params.id, 'admin');
   db.run('DELETE FROM venues WHERE id = ?', params.id);
   sendJson(res, 200, { ok: true });
+});
+
+// Set up a new venue from an existing one: zones, content library, menus,
+// playlists and schedules come across; screens don't (they get paired at the
+// new site). Screen-targeted schedules are skipped — those screens don't
+// exist yet.
+route('POST', '/api/venues/:id/clone', async (req, res, params) => {
+  const source = auth.assertVenue(req.user, params.id, 'admin');
+  const body = await readJson(req);
+  required(body, 'name');
+
+  const venueId = db.id();
+  db.run(
+    `INSERT INTO venues (id, org_id, name, timezone, address, logo_url, racing_jurisdiction, sleep_start, sleep_end, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    venueId, source.org_id, String(body.name).slice(0, 80),
+    body.timezone || source.timezone, body.address || '',
+    source.logo_url, source.racing_jurisdiction, source.sleep_start, source.sleep_end, db.now());
+
+  const zoneMap = {};
+  for (const z of db.all('SELECT * FROM zones WHERE venue_id = ?', source.id)) {
+    zoneMap[z.id] = db.id();
+    db.run('INSERT INTO zones (id, venue_id, name, description) VALUES (?, ?, ?, ?)',
+      zoneMap[z.id], venueId, z.name, z.description || '');
+  }
+
+  // Menus first, so their board widgets can be mapped like any other media.
+  const menuMap = {};
+  const mediaMap = {};
+  for (const m of db.all('SELECT * FROM menus WHERE venue_id = ?', source.id)) {
+    menuMap[m.id] = db.id();
+    db.run('INSERT INTO menus (id, venue_id, name, theme, sections, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      menuMap[m.id], venueId, m.name, m.theme || 'classic', m.sections, db.now(), db.now());
+  }
+  for (const m of db.all('SELECT * FROM media WHERE venue_id = ? AND expires_at IS NULL', source.id)) {
+    let src = m.src;
+    if (m.type === 'widget' && String(m.src).startsWith('menuboard:')) {
+      const newMenuId = menuMap[String(m.src).slice('menuboard:'.length)];
+      if (!newMenuId) continue; // widget for a menu that no longer exists
+      src = `menuboard:${newMenuId}`;
+    }
+    mediaMap[m.id] = db.id();
+    db.run(
+      `INSERT INTO media (id, venue_id, name, type, src, content, duration_seconds, fit, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      mediaMap[m.id], venueId, m.name, m.type, src, m.content || '', m.duration_seconds, m.fit || 'cover', db.now());
+  }
+
+  const playlistMap = {};
+  for (const p of db.all('SELECT * FROM playlists WHERE venue_id = ?', source.id)) {
+    playlistMap[p.id] = db.id();
+    db.run('INSERT INTO playlists (id, venue_id, name, created_at) VALUES (?, ?, ?, ?)',
+      playlistMap[p.id], venueId, p.name, db.now());
+    for (const item of db.all('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position, id', p.id)) {
+      if (!mediaMap[item.media_id]) continue; // expired/unclonable media
+      db.run('INSERT INTO playlist_items (id, playlist_id, media_id, position, duration_override) VALUES (?, ?, ?, ?, ?)',
+        db.id(), playlistMap[p.id], mediaMap[item.media_id], item.position, item.duration_override);
+    }
+  }
+
+  let schedules = 0;
+  for (const s of db.all('SELECT * FROM schedules WHERE venue_id = ? AND screen_id IS NULL', source.id)) {
+    if (!playlistMap[s.playlist_id]) continue;
+    db.run(
+      `INSERT INTO schedules (id, venue_id, zone_id, screen_id, playlist_id, name, days_of_week, start_time, end_time, start_date, end_date, priority, active)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      db.id(), venueId, s.zone_id ? (zoneMap[s.zone_id] || null) : null, playlistMap[s.playlist_id],
+      s.name, s.days_of_week, s.start_time, s.end_time, s.start_date, s.end_date, s.priority, s.active);
+    schedules += 1;
+  }
+
+  db.logEvent('venue.cloned', { venueId, detail: `${body.name} (from ${source.name})`, actor: actorOf(req) });
+  sendJson(res, 201, {
+    ...db.get('SELECT * FROM venues WHERE id = ?', venueId),
+    cloned: {
+      zones: Object.keys(zoneMap).length,
+      media: Object.keys(mediaMap).length,
+      menus: Object.keys(menuMap).length,
+      playlists: Object.keys(playlistMap).length,
+      schedules,
+    },
+  });
 });
 
 // ---- Zones ------------------------------------------------------------
@@ -217,7 +308,7 @@ route('POST', '/api/screens/:id/pair', async (req, res, params) => {
   db.run('UPDATE screens SET device_key = ?, player_info = ?, last_seen_at = ? WHERE id = ?',
     pairing.device_key, pairing.player_info, db.now(), screen.id);
   db.run('DELETE FROM pairings WHERE pairing_code = ?', code);
-  db.logEvent('screen.paired', { venueId: screen.venue_id, screenId: screen.id, detail: code });
+  db.logEvent('screen.paired', { venueId: screen.venue_id, screenId: screen.id, detail: code, actor: actorOf(req) });
   sse.send(pairing.device_key, 'paired', { screen_id: screen.id });
   sendJson(res, 200, withStatus(db.get('SELECT * FROM screens WHERE id = ?', screen.id)));
 });
@@ -492,7 +583,7 @@ route('POST', '/api/emergencies', async (req, res) => {
   const emergencyId = db.id();
   db.run('INSERT INTO emergencies (id, venue_id, level, title, message, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
     emergencyId, body.venue_id || null, level, body.title, body.message || '', db.now());
-  db.logEvent('emergency.activated', { venueId: body.venue_id || null, detail: `${level}: ${body.title}` });
+  db.logEvent('emergency.activated', { venueId: body.venue_id || null, detail: `${level}: ${body.title}`, actor: actorOf(req) });
   if (body.venue_id) nudgeVenue(body.venue_id); else nudgeAll();
   sendJson(res, 201, db.get('SELECT * FROM emergencies WHERE id = ?', emergencyId));
 });
@@ -502,7 +593,7 @@ route('POST', '/api/emergencies/:id/clear', (req, res, params) => {
   if (emergency.venue_id) auth.assertVenue(req.user, emergency.venue_id, 'editor');
   else auth.requireRole(req.user, 'superadmin');
   db.run('UPDATE emergencies SET active = 0, cleared_at = ? WHERE id = ?', db.now(), emergency.id);
-  db.logEvent('emergency.cleared', { venueId: emergency.venue_id, detail: emergency.title });
+  db.logEvent('emergency.cleared', { venueId: emergency.venue_id, detail: emergency.title, actor: actorOf(req) });
   if (emergency.venue_id) nudgeVenue(emergency.venue_id); else nudgeAll();
   sendJson(res, 200, { ok: true });
 });
@@ -517,7 +608,7 @@ route('POST', '/api/venues/:id/remote-token', (req, res, params) => {
   const venue = auth.assertVenue(req.user, params.id, 'admin');
   const token = crypto.randomBytes(16).toString('hex');
   db.run('UPDATE venues SET remote_token = ? WHERE id = ?', token, venue.id);
-  db.logEvent('remote.token_rotated', { venueId: venue.id, detail: venue.name });
+  db.logEvent('remote.token_rotated', { venueId: venue.id, detail: venue.name, actor: actorOf(req) });
   sendJson(res, 200, { token, url: `/games/${token}` });
 });
 
@@ -569,7 +660,7 @@ route('POST', '/api/draws/:id/draw', (req, res, params) => {
   const draw = mustFind(db.get('SELECT * FROM draws WHERE id = ?', params.id), 'draw');
   auth.assertVenue(req.user, draw.venue_id, 'editor');
   const updated = spinDraw(draw);
-  db.logEvent('draw.number', { venueId: draw.venue_id, detail: `${draw.name}: #${drawView(updated).latest_number}` });
+  db.logEvent('draw.number', { venueId: draw.venue_id, detail: `${draw.name}: #${drawView(updated).latest_number}`, actor: actorOf(req) });
   nudgeVenue(draw.venue_id);
   sendJson(res, 200, drawView(updated));
 });
@@ -578,7 +669,7 @@ route('POST', '/api/draws/:id/clear', (req, res, params) => {
   const draw = mustFind(db.get('SELECT * FROM draws WHERE id = ?', params.id), 'draw');
   auth.assertVenue(req.user, draw.venue_id, 'editor');
   db.run("UPDATE draws SET status = 'cleared' WHERE id = ?", draw.id);
-  db.logEvent('draw.cleared', { venueId: draw.venue_id, detail: draw.name });
+  db.logEvent('draw.cleared', { venueId: draw.venue_id, detail: draw.name, actor: actorOf(req) });
   nudgeVenue(draw.venue_id);
   sendJson(res, 200, { ok: true });
 });

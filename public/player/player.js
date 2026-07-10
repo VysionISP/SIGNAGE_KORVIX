@@ -34,6 +34,14 @@
   const $ = (id) => document.getElementById(id);
   const stage = $('stage');
 
+  // Brand comes from the server (KORVIX_BRAND env) so a rebrand is one env var.
+  function applyBrand(brand) {
+    if (!brand) return;
+    document.title = `${brand} Player`;
+    document.querySelectorAll('.brand').forEach((el) => { el.textContent = brand.toUpperCase(); });
+  }
+  fetch('/api/auth/state').then((r) => r.json()).then((s) => applyBrand(s.brand)).catch(() => {});
+
   // ---- boot / pairing -------------------------------------------------------
 
   async function hello() {
@@ -173,6 +181,7 @@
     };
     manifest = next;
     renderStatus();
+    renderSleep();
     renderRotation();
     renderLayout(prevManifestSnapshot);
     renderEmergency();
@@ -223,6 +232,34 @@
   function playableItems() {
     return (manifest && manifest.playlist && manifest.playlist.items) || [];
   }
+
+  // ---- overnight sleep --------------------------------------------------------
+  // The venue sets a blackout window (e.g. 00:00–07:00) and every screen goes
+  // dark for it, computed against the venue's own timezone. Emergencies still
+  // punch through (their overlay sits above this one).
+
+  function venueMinutesNow() {
+    const parts = new Intl.DateTimeFormat('en-AU', {
+      timeZone: manifest.venue.timezone, hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date()).split(':');
+    return (parseInt(parts[0], 10) % 24) * 60 + parseInt(parts[1], 10);
+  }
+
+  function renderSleep() {
+    const sleep = manifest && manifest.venue && manifest.venue.sleep;
+    let asleep = false;
+    if (sleep && sleep.start && sleep.end && sleep.start !== sleep.end) {
+      try {
+        const toMin = (s) => { const [h, m] = s.split(':').map(Number); return h * 60 + (m || 0); };
+        const now = venueMinutesNow();
+        const start = toMin(sleep.start);
+        const end = toMin(sleep.end);
+        asleep = end > start ? (now >= start && now < end) : (now >= start || now < end);
+      } catch { asleep = false; }
+    }
+    $('sleep').style.display = asleep ? 'flex' : 'none';
+  }
+  setInterval(() => { if (manifest) renderSleep(); }, 30 * 1000);
 
   function stopPlayback() {
     finishCurrentPlay();
@@ -491,6 +528,8 @@
     const feeds = (manifest && manifest.feeds) || {};
     if (name.startsWith('racing:')) return racingWidget(name.slice(7));
     if (name.startsWith('menuboard:')) return menuBoardWidget(name.slice(10));
+    if (name.startsWith('qr:')) return qrWidget(name.slice(3));
+    if (name.startsWith('countdown:')) return countdownWidget(name.slice(10));
     switch (name) {
       case 'jackpot': {
         const jackpots = (feeds.gaming && feeds.gaming.jackpots) || [];
@@ -599,6 +638,50 @@
     return `<div class="widget" style="background:linear-gradient(135deg,${gradient})">` +
       `<div class="kicker">${kicker}</div>${inner}</div>`;
   }
+
+  // 'qr:<url>|<label>' — big scannable code (generated & cached by the server).
+  function qrWidget(spec) {
+    const [url, label] = spec.split('|');
+    if (!url) return widgetShell('SCAN ME', '<div style="opacity:.7;font-size:2.5vw">No link set for this QR slide</div>', '#111827,#334155');
+    const pretty = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    return widgetShell('SCAN ME',
+      `${label ? `<h1>${esc(label)}</h1>` : ''}` +
+      `<div style="background:#fff;padding:2.2vh;border-radius:2vh;display:inline-block;margin-top:1vh">` +
+      `<img src="/qr?data=${encodeURIComponent(url)}" style="width:34vh;height:34vh;display:block" alt="QR code"></div>` +
+      `<div style="font-size:2.2vw;opacity:.85;margin-top:2.5vh">${esc(pretty)}</div>`,
+      '#111827,#334155');
+  }
+
+  // 'countdown:<ISO datetime>|<label>' — live days/hours/mins/secs.
+  function countdownWidget(spec) {
+    const [when, label] = spec.split('|');
+    const target = Date.parse(when);
+    if (!Number.isFinite(target)) {
+      return widgetShell('COUNTDOWN', '<div style="opacity:.7;font-size:2.5vw">No date set for this countdown</div>', '#1e1b4b,#4338ca');
+    }
+    return widgetShell('COUNTING DOWN TO',
+      `${label ? `<h1>${esc(label)}</h1>` : ''}` +
+      `<div class="countdown-live" data-countdown="${esc(when)}" style="margin-top:2vh"></div>`,
+      '#1e1b4b,#4338ca');
+  }
+
+  function countdownSegments(ms) {
+    if (ms <= 0) return '<div style="font-size:8vw;font-weight:900">IT&rsquo;S ON!</div>';
+    const total = Math.floor(ms / 1000);
+    const d = Math.floor(total / 86400), h = Math.floor((total % 86400) / 3600);
+    const m = Math.floor((total % 3600) / 60), s = total % 60;
+    const seg = (n, unit) => `<div style="display:inline-block;margin:0 1vw;min-width:9vw">` +
+      `<div style="font-size:7vw;font-weight:900;font-variant-numeric:tabular-nums;background:rgba(0,0,0,.35);border-radius:1.5vh;padding:1vh 0">${String(n).padStart(2, '0')}</div>` +
+      `<div style="font-size:1.8vw;opacity:.75;letter-spacing:.2em;margin-top:.8vh">${unit}</div></div>`;
+    return (d > 0 ? seg(d, 'DAYS') : '') + seg(h, 'HOURS') + seg(m, 'MINS') + (d > 0 ? '' : seg(s, 'SECS'));
+  }
+
+  setInterval(() => {
+    document.querySelectorAll('[data-countdown]').forEach((el) => {
+      const html = countdownSegments(Date.parse(el.dataset.countdown) - Date.now());
+      if (el._cd !== html) { el._cd = html; el.innerHTML = html; }
+    });
+  }, 1000);
 
   // ---- split-screen layout: side panel rotation + ticker strip ----------------------
 

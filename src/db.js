@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS venues (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -282,6 +289,27 @@ function migrate() {
     // 1 while an offline alert is outstanding, so we alert once per outage.
     db.exec('ALTER TABLE screens ADD COLUMN alerted INTEGER NOT NULL DEFAULT 0');
   }
+  const eventCols = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
+  if (!eventCols.includes('actor')) {
+    // Audit trail: which login (or system/console) did it.
+    db.exec('ALTER TABLE events ADD COLUMN actor TEXT');
+  }
+  const orgCols = db.prepare('PRAGMA table_info(orgs)').all().map((c) => c.name);
+  if (!orgCols.includes('alert_email')) {
+    // Screen offline/recovery alerts go here per business (when email is configured).
+    db.exec('ALTER TABLE orgs ADD COLUMN alert_email TEXT');
+  }
+  const mediaCols0 = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
+  if (!mediaCols0.includes('expires_at')) {
+    // Self-expiring media (e.g. tonight's-special photos posted from the console).
+    db.exec('ALTER TABLE media ADD COLUMN expires_at TEXT');
+  }
+  const venueCols0 = db.prepare('PRAGMA table_info(venues)').all().map((c) => c.name);
+  if (!venueCols0.includes('sleep_start')) {
+    // Screens show black outside trading hours (venue-local HH:MM window).
+    db.exec('ALTER TABLE venues ADD COLUMN sleep_start TEXT');
+    db.exec('ALTER TABLE venues ADD COLUMN sleep_end TEXT');
+  }
   const scheduleCols = db.prepare('PRAGMA table_info(schedules)').all().map((c) => c.name);
   if (!scheduleCols.includes('start_date')) {
     // Optional calendar bounds (venue-local YYYY-MM-DD). NULL = every week.
@@ -335,9 +363,9 @@ function get(sql, ...params) { return open().prepare(sql).get(...params); }
 function all(sql, ...params) { return open().prepare(sql).all(...params); }
 function run(sql, ...params) { return open().prepare(sql).run(...params); }
 
-function logEvent(type, { venueId = null, screenId = null, detail = '' } = {}) {
-  run('INSERT INTO events (venue_id, screen_id, type, detail, created_at) VALUES (?, ?, ?, ?, ?)',
-    venueId, screenId, type, String(detail), now());
+function logEvent(type, { venueId = null, screenId = null, detail = '', actor = null } = {}) {
+  run('INSERT INTO events (venue_id, screen_id, type, detail, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    venueId, screenId, type, String(detail), actor, now());
 }
 
 function isEmpty() {

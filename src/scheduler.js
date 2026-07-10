@@ -10,6 +10,7 @@
 const db = require('./db');
 const cashking = require('./cardgame');
 const games = require('./games');
+const { BRAND } = require('./mailer');
 
 // Venue-local weekday (0=Sun..6=Sat), minutes since midnight, and the local
 // calendar date (plus yesterday's, for windows that wrap past midnight).
@@ -138,8 +139,9 @@ function playlistItems(playlistId) {
     `SELECT pi.id AS item_id, pi.duration_override, m.*
      FROM playlist_items pi JOIN media m ON m.id = pi.media_id
      WHERE pi.playlist_id = ?
+       AND (m.expires_at IS NULL OR m.expires_at > ?)
      ORDER BY pi.position, pi.id`,
-    playlistId,
+    playlistId, db.now(),
   ).map((row) => ({
     id: row.item_id,
     media_id: row.id,
@@ -197,6 +199,7 @@ function buildManifest(screen) {
   return {
     generated_at: db.now(),
     refresh_seconds: 60,
+    brand: BRAND,
     screen: {
       id: screen.id,
       name: screen.name,
@@ -218,7 +221,13 @@ function buildManifest(screen) {
       let sections; try { sections = JSON.parse(m.sections); } catch { sections = []; }
       return { id: m.id, name: m.name, theme: m.theme || 'classic', sections };
     }),
-    venue: { id: venue.id, name: venue.name, timezone: venue.timezone, logo: venue.logo_url || null },
+    venue: {
+      id: venue.id, name: venue.name, timezone: venue.timezone, logo: venue.logo_url || null,
+      // Overnight blackout window (venue-local HH:MM); the player computes it live.
+      sleep: venue.sleep_start && venue.sleep_end
+        ? { start: venue.sleep_start, end: venue.sleep_end }
+        : null,
+    },
     zone: zone ? { id: zone.id, name: zone.name } : null,
     emergency: emergency && {
       id: emergency.id,

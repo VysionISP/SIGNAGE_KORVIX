@@ -10,11 +10,29 @@
 // Webhook payloads are plain JSON with a `text` field, so the same URL works
 // for Slack, Discord (append /slack), Teams, or any custom receiver.
 
+const fs = require('node:fs');
+const path = require('node:path');
 const db = require('./db');
+const mailer = require('./mailer');
 
 const OFFLINE_AFTER_MS = parseInt(process.env.KORVIX_OFFLINE_MS, 10) || 90 * 1000;
 const ALERT_WEBHOOK = process.env.KORVIX_ALERT_WEBHOOK || '';
 const PLAYS_RETENTION_DAYS = parseInt(process.env.KORVIX_PLAYS_RETENTION_DAYS, 10) || 90;
+const BACKUPS_KEPT = parseInt(process.env.KORVIX_BACKUPS_KEPT, 10) || 14;
+
+// Screen offline/recovery emails go to the owning business (orgs.alert_email).
+// A no-op until SMTP is configured — the webhook keeps working regardless.
+function emailOrgAlert(venueId, subject, bodyHtml) {
+  if (!mailer.configured()) return;
+  const org = db.get(
+    'SELECT o.* FROM orgs o JOIN venues v ON v.org_id = o.id WHERE v.id = ?', venueId);
+  if (!org?.alert_email) return;
+  mailer.sendMail({
+    to: org.alert_email,
+    subject,
+    html: mailer.template(subject, bodyHtml),
+  });
+}
 
 async function postWebhook(payload) {
   if (!ALERT_WEBHOOK) return;
@@ -48,6 +66,8 @@ function markSeen(screen, playerInfoJson) {
       screen: screen.name,
       venue: venue ? venue.name : null,
     });
+    emailOrgAlert(screen.venue_id, `✅ Screen back online: ${screen.name}`,
+      `<p><b>${screen.name}</b> at <b>${venue ? venue.name : 'your venue'}</b> is showing content again.</p>`);
   }
 }
 
@@ -70,6 +90,11 @@ function checkOffline() {
       venue: screen.venue_name,
       last_seen_at: screen.last_seen_at,
     });
+    emailOrgAlert(screen.venue_id, `⚠️ Screen offline: ${screen.name}`,
+      `<p><b>${screen.name}</b> at <b>${screen.venue_name}</b> stopped responding`
+      + ` (last seen ${screen.last_seen_at}).</p>`
+      + '<p>Usual fixes: check the TV is on and its power/network cables are in,'
+      + ' or power-cycle the media player. It will show as recovered here as soon as it reconnects.</p>');
   }
   return stale.length;
 }
@@ -77,6 +102,49 @@ function checkOffline() {
 function prunePlays() {
   const cutoff = new Date(Date.now() - PLAYS_RETENTION_DAYS * 86400 * 1000).toISOString();
   db.run('DELETE FROM plays WHERE started_at < ?', cutoff);
+}
+
+// Expired console photos (and other self-expiring media): remove the rows and
+// their uploaded files once past their expiry.
+function pruneExpiredMedia() {
+  const expired = db.all('SELECT * FROM media WHERE expires_at IS NOT NULL AND expires_at < ?', db.now());
+  for (const m of expired) {
+    db.run('DELETE FROM media WHERE id = ?', m.id); // playlist_items cascade
+    if (m.src && m.src.startsWith('/uploads/')) {
+      const file = path.join(db.DATA_DIR, 'uploads', path.basename(m.src));
+      try { fs.unlinkSync(file); } catch { /* already gone */ }
+    }
+    db.logEvent('media.expired', { venueId: m.venue_id, detail: m.name, actor: 'system' });
+  }
+  if (expired.length) {
+    const { nudgeVenue } = require('./routes/admin');
+    for (const vid of new Set(expired.map((m) => m.venue_id))) nudgeVenue(vid);
+  }
+  return expired.length;
+}
+
+// ---- automated nightly backups ----------------------------------------------
+
+const BACKUP_DIR = path.join(db.DATA_DIR, 'backups');
+
+function runBackup() {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const file = path.join(BACKUP_DIR, `signage-${stamp}.db`);
+    if (fs.existsSync(file)) return file; // already done today
+    db.open().exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    // keep the newest N, drop the rest
+    const all = fs.readdirSync(BACKUP_DIR).filter((f) => f.endsWith('.db')).sort().reverse();
+    for (const old of all.slice(BACKUPS_KEPT)) {
+      try { fs.unlinkSync(path.join(BACKUP_DIR, old)); } catch { /* ignore */ }
+    }
+    db.logEvent('backup.created', { detail: path.basename(file), actor: 'system' });
+    return file;
+  } catch (err) {
+    console.error('[korvix] nightly backup failed:', err.message);
+    return null;
+  }
 }
 
 // ---- automatic weather (Open-Meteo) -----------------------------------------
@@ -119,14 +187,30 @@ async function refreshWeather() {
   }
 }
 
+function cleanupResets() {
+  db.run('DELETE FROM password_resets WHERE expires_at < ?', db.now());
+}
+
 function start() {
   // .unref() so timers never hold the process open (tests, shutdown).
-  setInterval(() => { checkOffline(); prunePlays(); require('./auth').cleanupSessions(); }, 30 * 1000).unref();
+  setInterval(() => {
+    checkOffline();
+    prunePlays();
+    pruneExpiredMedia();
+    cleanupResets();
+    require('./auth').cleanupSessions();
+  }, 30 * 1000).unref();
   setInterval(refreshWeather, 30 * 60 * 1000).unref();
   setTimeout(refreshWeather, 5000).unref(); // first pass shortly after boot
+  // One backup per calendar day; runBackup() no-ops if today's already exists.
+  setInterval(runBackup, 60 * 60 * 1000).unref();
+  setTimeout(runBackup, 15000).unref();
   if (!ALERT_WEBHOOK) {
     console.log('[korvix] tip: set KORVIX_ALERT_WEBHOOK to get screen offline/recovery alerts (Slack/Teams/any JSON webhook)');
   }
+  if (!mailer.configured()) {
+    console.log('[korvix] tip: set SMTP_HOST/SMTP_USER/SMTP_PASS/MAIL_FROM to enable password reset, invite and alert emails');
+  }
 }
 
-module.exports = { start, markSeen, checkOffline, prunePlays, refreshWeather, postWebhook, OFFLINE_AFTER_MS };
+module.exports = { start, markSeen, checkOffline, prunePlays, pruneExpiredMedia, runBackup, cleanupResets, refreshWeather, postWebhook, OFFLINE_AFTER_MS, BACKUP_DIR };

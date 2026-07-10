@@ -6,8 +6,11 @@
 // without dashboard access. Rotating the token in the dashboard instantly
 // revokes every phone that has the old link.
 
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
 const db = require('../db');
-const { sendJson, readJson, HttpError, required } = require('../util');
+const { sendJson, readJson, readBody, HttpError, required } = require('../util');
 const { nudgeVenue } = require('./admin');
 const { spinDraw, drawView } = require('../draws');
 const cashking = require('../cardgame');
@@ -15,6 +18,10 @@ const games = require('../games');
 
 const routes = [];
 function route(method, pattern, handler) { routes.push({ method, pattern, handler }); }
+
+// Console actions are venue-token-authed, not per-login, so the audit trail
+// attributes them to the device rather than a person.
+const logEvent = (type, opts) => db.logEvent(type, { ...opts, actor: 'Games console' });
 
 function venueForToken(token) {
   const venue = token && db.get('SELECT * FROM venues WHERE remote_token = ?', token);
@@ -34,8 +41,10 @@ route('GET', '/api/remote/:token', (req, res, params) => {
     `SELECT * FROM emergencies WHERE active = 1 AND (venue_id IS NULL OR venue_id = ?)
      ORDER BY created_at DESC LIMIT 1`, venue.id);
   sendJson(res, 200, {
+    brand: require('../mailer').BRAND,
     venue: { id: venue.id, name: venue.name },
     zones: db.all('SELECT id, name FROM zones WHERE venue_id = ? ORDER BY name', venue.id),
+    playlists: db.all('SELECT id, name FROM playlists WHERE venue_id = ? ORDER BY name', venue.id),
     draws: draws.map(drawView),
     card_game: game ? cashking.boardView(game) : null,
     wheel: (() => { const w = games.currentWheel(venue.id); return w ? games.wheelView(w) : null; })(),
@@ -58,7 +67,7 @@ route('POST', '/api/remote/:token/return-to-advertising', (req, res, params) => 
   const wheels = db.run('UPDATE wheels SET live = 0 WHERE venue_id = ? AND live = 1', venue.id).changes;
   const badges = db.run('UPDATE badge_draws SET live = 0 WHERE venue_id = ? AND live = 1', venue.id).changes;
   if (draws || cardGames || wheels || badges) {
-    db.logEvent('screens.returned', { venueId: venue.id, detail: `back to advertising (staff remote)` });
+    logEvent('screens.returned', { venueId: venue.id, detail: `back to advertising (staff remote)` });
     nudgeVenue(venue.id);
   }
   sendJson(res, 200, { ok: true, cleared: { draws, card_games: cardGames, wheels, badge_draws: badges } });
@@ -79,7 +88,7 @@ route('POST', '/api/remote/:token/wheels', async (req, res, params) => {
   const existing = games.currentWheel(venue.id);
   if (existing) db.run("UPDATE wheels SET status = 'archived', live = 0 WHERE id = ?", existing.id);
   const wheel = games.createWheel(venue.id, body);
-  db.logEvent('wheel.created', { venueId: venue.id, detail: `${wheel.name} (staff remote)` });
+  logEvent('wheel.created', { venueId: venue.id, detail: `${wheel.name} (staff remote)` });
   nudgeVenue(venue.id);
   sendJson(res, 201, games.wheelView(wheel));
 });
@@ -102,7 +111,7 @@ route('POST', '/api/remote/:token/wheels/:id/end-session', (req, res, params) =>
 route('POST', '/api/remote/:token/wheels/:id/spin', (req, res, params) => {
   const { venue, wheel } = ownedWheel(params.token, params.id);
   const spin = games.spinWheel(wheel);
-  db.logEvent('wheel.spun', { venueId: venue.id, detail: `${wheel.name}: ${spin.label}` });
+  logEvent('wheel.spun', { venueId: venue.id, detail: `${wheel.name}: ${spin.label}` });
   nudgeVenue(venue.id);
   sendJson(res, 200, { ...games.wheelView(db.get('SELECT * FROM wheels WHERE id = ?', wheel.id)), spin });
 });
@@ -122,7 +131,7 @@ route('POST', '/api/remote/:token/badge-draws', async (req, res, params) => {
   const existing = games.currentBadge(venue.id);
   if (existing) db.run("UPDATE badge_draws SET status = 'archived', live = 0 WHERE id = ?", existing.id);
   const badge = games.createBadgeDraw(venue.id, body);
-  db.logEvent('badge.created', { venueId: venue.id, detail: `${badge.name} (staff remote)` });
+  logEvent('badge.created', { venueId: venue.id, detail: `${badge.name} (staff remote)` });
   nudgeVenue(venue.id);
   sendJson(res, 201, games.badgeView(badge));
 });
@@ -145,7 +154,7 @@ route('POST', '/api/remote/:token/badge-draws/:id/end-session', (req, res, param
 route('POST', '/api/remote/:token/badge-draws/:id/draw', (req, res, params) => {
   const { venue, badge } = ownedBadge(params.token, params.id);
   const drawn = games.drawMember(badge);
-  db.logEvent('badge.drawn', { venueId: venue.id, detail: `${badge.name}: #${drawn.number} ${drawn.name}` });
+  logEvent('badge.drawn', { venueId: venue.id, detail: `${badge.name}: #${drawn.number} ${drawn.name}` });
   nudgeVenue(venue.id);
   sendJson(res, 200, games.badgeView(db.get('SELECT * FROM badge_draws WHERE id = ?', badge.id)));
 });
@@ -154,7 +163,7 @@ route('POST', '/api/remote/:token/badge-draws/:id/outcome', async (req, res, par
   const { venue, badge } = ownedBadge(params.token, params.id);
   const body = await readJson(req);
   const updated = games.resolveBadge(badge, !!body.claimed);
-  db.logEvent(body.claimed ? 'badge.claimed' : 'badge.unclaimed', {
+  logEvent(body.claimed ? 'badge.claimed' : 'badge.unclaimed', {
     venueId: venue.id,
     detail: body.claimed
       ? `$${badge.prize_current} claimed`
@@ -179,7 +188,7 @@ route('POST', '/api/remote/:token/emergency', async (req, res, params) => {
   const emergencyId = db.id();
   db.run('INSERT INTO emergencies (id, venue_id, level, title, message, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
     emergencyId, venue.id, level, body.title, body.message || '', db.now());
-  db.logEvent('emergency.activated', { venueId: venue.id, detail: `${level}: ${body.title} (staff remote)` });
+  logEvent('emergency.activated', { venueId: venue.id, detail: `${level}: ${body.title} (staff remote)` });
   nudgeVenue(venue.id);
   sendJson(res, 201, { id: emergencyId, level });
 });
@@ -189,7 +198,7 @@ route('POST', '/api/remote/:token/emergency/:id/clear', (req, res, params) => {
   const emergency = db.get('SELECT * FROM emergencies WHERE id = ? AND venue_id = ?', params.id, venue.id);
   if (!emergency) throw new HttpError(404, 'emergency not found (all-venue alerts are cleared by Korvix)');
   db.run('UPDATE emergencies SET active = 0, cleared_at = ? WHERE id = ?', db.now(), emergency.id);
-  db.logEvent('emergency.cleared', { venueId: venue.id, detail: `${emergency.title} (staff remote)` });
+  logEvent('emergency.cleared', { venueId: venue.id, detail: `${emergency.title} (staff remote)` });
   nudgeVenue(venue.id);
   sendJson(res, 200, { ok: true });
 });
@@ -205,7 +214,7 @@ route('POST', '/api/remote/:token/card-games', async (req, res, params) => {
     throw new HttpError(409, `"${existing.name}" is still running — find the Joker or archive it first`);
   }
   const game = cashking.createGame(venue.id, body);
-  db.logEvent('cashking.created', { venueId: venue.id, detail: `${game.name} @ $${game.jackpot_start} (staff remote)` });
+  logEvent('cashking.created', { venueId: venue.id, detail: `${game.name} @ $${game.jackpot_start} (staff remote)` });
   cashking.fireWebhook(game, venue.name, 'created');
   nudgeVenue(venue.id);
   sendJson(res, 201, cashking.boardView(game));
@@ -214,7 +223,7 @@ route('POST', '/api/remote/:token/card-games', async (req, res, params) => {
 route('POST', '/api/remote/:token/card-games/:id/archive', (req, res, params) => {
   const { venue, game } = ownedGame(params.token, params.id);
   db.run("UPDATE card_games SET status = 'archived', live = 0 WHERE id = ?", game.id);
-  db.logEvent('cashking.archived', { venueId: venue.id, detail: `${game.name} (staff remote)` });
+  logEvent('cashking.archived', { venueId: venue.id, detail: `${game.name} (staff remote)` });
   nudgeVenue(venue.id);
   sendJson(res, 200, { ok: true });
 });
@@ -230,7 +239,7 @@ route('POST', '/api/remote/:token/card-games/:id/live', (req, res, params) => {
   const { venue, game } = ownedGame(params.token, params.id);
   if (game.status === 'archived') throw new HttpError(409, 'game is archived');
   db.run('UPDATE card_games SET live = 1 WHERE id = ?', game.id);
-  db.logEvent('cashking.live', { venueId: venue.id, detail: `${game.name} (staff remote)` });
+  logEvent('cashking.live', { venueId: venue.id, detail: `${game.name} (staff remote)` });
   cashking.fireWebhook(db.get('SELECT * FROM card_games WHERE id = ?', game.id), venue.name, 'live');
   nudgeVenue(venue.id);
   sendJson(res, 200, cashking.boardView(db.get('SELECT * FROM card_games WHERE id = ?', game.id)));
@@ -249,13 +258,56 @@ route('POST', '/api/remote/:token/card-games/:id/pick', async (req, res, params)
   const index = parseInt(body.index, 10);
   if (!Number.isInteger(index)) throw new HttpError(400, 'index required');
   const { game: updated, wasJoker } = cashking.pickCard(game, index, body.picked_by);
-  db.logEvent(wasJoker ? 'cashking.won' : 'cashking.miss', {
+  logEvent(wasJoker ? 'cashking.won' : 'cashking.miss', {
     venueId: venue.id,
     detail: `${updated.name}: #${index + 1} (staff remote)` + (wasJoker ? ` — $${updated.jackpot_current} WON` : ''),
   });
   cashking.fireWebhook(updated, venue.name, wasJoker ? 'won' : 'miss');
   nudgeVenue(venue.id);
   sendJson(res, 200, { ...cashking.boardView(updated), was_joker: wasJoker });
+});
+
+// ---- Photo to screen ------------------------------------------------------------
+//
+// Staff snap a photo on the tablet (tonight's special, a poster, a lost dog)
+// and it slots straight into a playlist, then quietly removes itself after
+// the chosen number of hours.
+
+const PHOTO_EXTS = { '.jpg': 1, '.jpeg': 1, '.png': 1, '.webp': 1, '.gif': 1 };
+
+route('POST', '/api/remote/:token/photo', async (req, res, params, url) => {
+  const venue = venueForToken(params.token);
+  const original = (url.searchParams.get('name') || 'photo.jpg').replace(/[^\w.-]+/g, '_');
+  const ext = path.extname(original).toLowerCase();
+  if (!PHOTO_EXTS[ext]) throw new HttpError(400, 'photos only — jpg, png, webp or gif');
+
+  const playlistId = url.searchParams.get('playlist_id') || '';
+  const playlist = db.get('SELECT * FROM playlists WHERE id = ? AND venue_id = ?', playlistId, venue.id);
+  if (!playlist) throw new HttpError(400, 'pick which playlist the photo should appear in');
+
+  const hours = Math.min(Math.max(parseFloat(url.searchParams.get('hours')) || 24, 0.5), 24 * 7);
+  const buf = await readBody(req, 30 * 1024 * 1024);
+  if (!buf.length) throw new HttpError(400, 'empty upload');
+
+  const uploadDir = path.join(db.DATA_DIR, 'uploads');
+  fs.mkdirSync(uploadDir, { recursive: true });
+  const fileName = `${venue.org_id || 'global'}__console-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}${ext}`;
+  fs.writeFileSync(path.join(uploadDir, fileName), buf);
+
+  const label = (url.searchParams.get('label') || '').trim() || `Console photo ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
+  const expiresAt = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+  const mediaId = db.id();
+  db.run(
+    `INSERT INTO media (id, venue_id, name, type, src, duration_seconds, fit, expires_at, created_at)
+     VALUES (?, ?, ?, 'image', ?, 10, 'contain', ?, ?)`,
+    mediaId, venue.id, label, `/uploads/${fileName}`, expiresAt, db.now());
+  const pos = db.get('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM playlist_items WHERE playlist_id = ?', playlist.id).p;
+  db.run('INSERT INTO playlist_items (id, playlist_id, media_id, position) VALUES (?, ?, ?, ?)',
+    db.id(), playlist.id, mediaId, pos);
+
+  logEvent('media.console_photo', { venueId: venue.id, detail: `${label} → ${playlist.name} (expires ${hours}h)` });
+  nudgeVenue(venue.id);
+  sendJson(res, 201, { ok: true, media_id: mediaId, playlist: playlist.name, expires_at: expiresAt });
 });
 
 route('POST', '/api/remote/:token/draws', async (req, res, params) => {
@@ -276,7 +328,7 @@ route('POST', '/api/remote/:token/draws', async (req, res, params) => {
     `INSERT INTO draws (id, venue_id, zone_id, name, range_start, range_end, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     drawId, venue.id, body.zone_id || null, body.name, start, end, db.now());
-  db.logEvent('draw.created', { venueId: venue.id, detail: `${body.name} (staff remote)` });
+  logEvent('draw.created', { venueId: venue.id, detail: `${body.name} (staff remote)` });
   sendJson(res, 201, drawView(db.get('SELECT * FROM draws WHERE id = ?', drawId)));
 });
 
@@ -290,7 +342,7 @@ function ownedDraw(token, drawId) {
 route('POST', '/api/remote/:token/draws/:id/draw', (req, res, params) => {
   const draw = ownedDraw(params.token, params.id);
   const updated = spinDraw(draw);
-  db.logEvent('draw.number', { venueId: draw.venue_id, detail: `${draw.name}: #${drawView(updated).latest_number} (staff remote)` });
+  logEvent('draw.number', { venueId: draw.venue_id, detail: `${draw.name}: #${drawView(updated).latest_number} (staff remote)` });
   nudgeVenue(draw.venue_id);
   sendJson(res, 200, drawView(updated));
 });
@@ -298,7 +350,7 @@ route('POST', '/api/remote/:token/draws/:id/draw', (req, res, params) => {
 route('POST', '/api/remote/:token/draws/:id/clear', (req, res, params) => {
   const draw = ownedDraw(params.token, params.id);
   db.run("UPDATE draws SET status = 'cleared' WHERE id = ?", draw.id);
-  db.logEvent('draw.cleared', { venueId: draw.venue_id, detail: `${draw.name} (staff remote)` });
+  logEvent('draw.cleared', { venueId: draw.venue_id, detail: `${draw.name} (staff remote)` });
   nudgeVenue(draw.venue_id);
   sendJson(res, 200, { ok: true });
 });

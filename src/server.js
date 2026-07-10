@@ -75,7 +75,8 @@ function matchRoute(method, pathname) {
 // Everything else under /api requires a logged-in user (or the legacy env
 // token, which acts as a superadmin API key).
 const OPEN_PREFIXES = ['/api/player/', '/api/integrations/', '/api/remote/', '/api/public/'];
-const OPEN_PATHS = new Set(['/api/auth/state', '/api/auth/login', '/api/auth/setup']);
+const OPEN_PATHS = new Set(['/api/auth/state', '/api/auth/login', '/api/auth/setup',
+  '/api/auth/forgot', '/api/auth/reset']);
 
 function isOpenApi(pathname) {
   return OPEN_PATHS.has(pathname) || OPEN_PREFIXES.some((p) => pathname.startsWith(p));
@@ -150,6 +151,42 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/') {
       res.writeHead(302, { Location: '/admin/' });
       return res.end();
+    }
+
+    // QR codes for 'qr:' slides — generated in-process (src/qrcode.js), no
+    // external service, works fully offline.
+    if (pathname === '/qr') {
+      const data = (url.searchParams.get('data') || '').slice(0, 450);
+      if (!data) throw new HttpError(400, 'data parameter required');
+      let svg;
+      try { svg = require('./qrcode').qrSvg(data); }
+      catch (err) { throw new HttpError(400, err.message); }
+      res.writeHead(200, {
+        'Content-Type': 'image/svg+xml',
+        'Cache-Control': 'public, max-age=31536000, immutable', // same data -> same code
+      });
+      return res.end(svg);
+    }
+
+    // Console PWA manifest, generated so the installed app carries the brand.
+    if (pathname === '/remote/manifest.webmanifest') {
+      const brand = require('./mailer').BRAND;
+      res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'no-cache' });
+      return res.end(JSON.stringify({
+        name: `${brand} Games`,
+        short_name: 'Games',
+        description: `Venue games console for ${brand} — draws, CashKing, wheel and badge draw`,
+        start_url: '/remote/',
+        scope: '/remote/',
+        display: 'standalone',
+        orientation: 'portrait',
+        background_color: '#150425',
+        theme_color: '#150425',
+        icons: [
+          { src: '/remote/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          { src: '/remote/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
+        ],
+      }));
     }
 
     // Clean games-console URL for venue tablets: /games/<venue-token>

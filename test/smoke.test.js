@@ -992,3 +992,242 @@ test('scheduler time-window helpers', () => {
   const openEnded = { ...fridayNight, start_date: null, end_date: null };
   assert.strictEqual(matchesSchedule(openEnded, nextSat1am), true); // weekly, no dates
 });
+
+// ---- SaaS pass: brand, emails, audit trail, sleep hours, cloning, console photos ----
+
+test('SaaS features: brand, password reset, alerts, sleep, clone, photos, backups', async (t) => {
+  const db = require('../src/db');
+  let orgId, venueId, zoneId, screenId, deviceKey, remoteToken, playlistId, mediaId;
+
+  await t.test('auth state exposes brand + email configuration', async () => {
+    const state = await api('GET', '/api/auth/state');
+    assert.strictEqual(state.status, 200);
+    assert.strictEqual(state.data.brand, 'Korvix Signage'); // default until KORVIX_BRAND is set
+    assert.strictEqual(state.data.email_configured, false); // no SMTP in the test env
+  });
+
+  await t.test('forgot password without SMTP explains itself; reset flow works with a token', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'Reset Test Group' });
+    orgId = org.data.id;
+    const user = await api('POST', '/api/users', {
+      email: 'manager@resettest.au', password: 'first-password-1', role: 'admin', org_id: orgId,
+    });
+    assert.strictEqual(user.status, 201);
+
+    // Unconfigured SMTP -> helpful 503, not a silent nothing.
+    const forgot = await api('POST', '/api/auth/forgot', { email: 'manager@resettest.au' });
+    assert.strictEqual(forgot.status, 503);
+    assert.match(forgot.data.error, /email is not set up/);
+
+    // Simulate the emailed token (what /forgot would create with SMTP configured).
+    const crypto = require('node:crypto');
+    const token = crypto.randomBytes(32).toString('hex');
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    const uid = db.get('SELECT id FROM users WHERE email = ?', 'manager@resettest.au').id;
+    db.run('INSERT INTO password_resets (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
+      hash, uid, db.now(), new Date(Date.now() + 3600 * 1000).toISOString());
+
+    // A live session that must die when the password resets.
+    const login1 = await api('POST', '/api/auth/login', { email: 'manager@resettest.au', password: 'first-password-1' });
+    assert.strictEqual(login1.status, 200);
+
+    const weak = await api('POST', '/api/auth/reset', { token, password: 'short' });
+    assert.strictEqual(weak.status, 400);
+    const reset = await api('POST', '/api/auth/reset', { token, password: 'brand-new-password-1' });
+    assert.strictEqual(reset.status, 200);
+
+    const replay = await api('POST', '/api/auth/reset', { token, password: 'sneaky-replay-pass' });
+    assert.strictEqual(replay.status, 400); // single use
+
+    const oldPass = await api('POST', '/api/auth/login', { email: 'manager@resettest.au', password: 'first-password-1' });
+    assert.strictEqual(oldPass.status, 401);
+    const newPass = await api('POST', '/api/auth/login', { email: 'manager@resettest.au', password: 'brand-new-password-1' });
+    assert.strictEqual(newPass.status, 200);
+    const killed = await api('GET', '/api/auth/me', undefined, login1.data.token);
+    assert.strictEqual(killed.status, 401); // reset signs out everywhere
+
+    // Expired tokens don't work.
+    const stale = crypto.randomBytes(32).toString('hex');
+    db.run('INSERT INTO password_resets (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
+      crypto.createHash('sha256').update(stale).digest('hex'), uid, db.now(),
+      new Date(Date.now() - 1000).toISOString());
+    const expired = await api('POST', '/api/auth/reset', { token: stale, password: 'whatever-password-1' });
+    assert.strictEqual(expired.status, 400);
+    require('../src/monitor').cleanupResets();
+    assert.strictEqual(db.all('SELECT * FROM password_resets').length, 0);
+  });
+
+  await t.test('business alert email persists via PATCH', async () => {
+    const set = await api('PATCH', `/api/orgs/${orgId}`, { alert_email: 'alerts@resettest.au' });
+    assert.strictEqual(set.status, 200);
+    assert.strictEqual(set.data.alert_email, 'alerts@resettest.au');
+    const keepName = await api('PATCH', `/api/orgs/${orgId}`, { name: 'Reset Test Group 2' });
+    assert.strictEqual(keepName.data.alert_email, 'alerts@resettest.au'); // untouched fields stay
+    const clear = await api('PATCH', `/api/orgs/${orgId}`, { alert_email: '' });
+    assert.strictEqual(clear.data.alert_email, null);
+  });
+
+  await t.test('audit trail records who did it', async () => {
+    const events = (await api('GET', '/api/events')).data.events;
+    const orgEvent = events.find((e) => e.type === 'org.created' && e.detail === 'Reset Test Group');
+    assert.ok(orgEvent, 'org.created event exists');
+    assert.strictEqual(orgEvent.actor, 'noc@korvix.au');
+    const login = events.find((e) => e.type === 'auth.login' && e.actor === 'manager@resettest.au');
+    assert.ok(login, 'login attributed to the user');
+  });
+
+  await t.test('sleep hours: validated, stored, and delivered in the manifest', async () => {
+    const venue = await api('POST', '/api/venues', { name: 'Sleepy Tavern', timezone: 'Australia/Sydney', org_id: orgId });
+    venueId = venue.data.id;
+    const zone = await api('POST', `/api/venues/${venueId}/zones`, { name: 'Bar' });
+    zoneId = zone.data.id;
+    const screen = await api('POST', `/api/venues/${venueId}/screens`, { name: 'Sleep TV', zone_id: zoneId });
+    screenId = screen.data.id;
+    const hello = await api('POST', '/api/player/hello', {});
+    deviceKey = hello.data.device_key;
+    const paired = await api('POST', `/api/screens/${screenId}/pair`, { pairing_code: hello.data.pairing_code });
+    assert.strictEqual(paired.status, 200);
+
+    const bad = await api('PATCH', `/api/venues/${venueId}`, { sleep_start: '25:99', sleep_end: 'nope' });
+    assert.strictEqual(bad.data.sleep_start, null); // invalid times stored as null
+
+    const set = await api('PATCH', `/api/venues/${venueId}`, { sleep_start: '00:30', sleep_end: '07:00' });
+    assert.strictEqual(set.data.sleep_start, '00:30');
+    assert.strictEqual(set.data.sleep_end, '07:00');
+
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.deepStrictEqual(manifest.data.venue.sleep, { start: '00:30', end: '07:00' });
+    assert.strictEqual(manifest.data.brand, 'Korvix Signage');
+
+    const off = await api('PATCH', `/api/venues/${venueId}`, { sleep_start: '', sleep_end: '' });
+    assert.strictEqual(off.data.sleep_start, null);
+  });
+
+  await t.test('venue clone copies content but not screens', async () => {
+    // Build out the template venue.
+    const media = await api('POST', `/api/venues/${venueId}/media`, {
+      name: 'House Promo', type: 'image', src: '/uploads/none.jpg', duration_seconds: 8,
+    });
+    mediaId = media.data.id;
+    const qr = await api('POST', `/api/venues/${venueId}/media`, {
+      name: 'Menu QR', type: 'widget', src: 'qr:https://menu.example|Scan for menu', duration_seconds: 12,
+    });
+    assert.strictEqual(qr.status, 201);
+    const menu = await api('POST', `/api/venues/${venueId}/menus`, {
+      name: 'Bistro', theme: 'pub', sections: [{ title: 'Mains', items: [{ name: 'Parma', price: 25 }] }],
+    });
+    assert.strictEqual(menu.status, 201);
+    const playlist = await api('POST', `/api/venues/${venueId}/playlists`, { name: 'Main Loop' });
+    playlistId = playlist.data.id;
+    await api('POST', `/api/playlists/${playlistId}/items`, { media_id: mediaId });
+    const schedule = await api('POST', `/api/venues/${venueId}/schedules`, {
+      name: 'All day', playlist_id: playlistId, days_of_week: [0, 1, 2, 3, 4, 5, 6],
+      start_time: '00:00', end_time: '24:00',
+    });
+    assert.strictEqual(schedule.status, 201);
+
+    const clone = await api('POST', `/api/venues/${venueId}/clone`, { name: 'Sleepy Tavern II' });
+    assert.strictEqual(clone.status, 201);
+    assert.strictEqual(clone.data.cloned.zones, 1);
+    assert.strictEqual(clone.data.cloned.menus, 1);
+    assert.strictEqual(clone.data.cloned.playlists, 1);
+    assert.strictEqual(clone.data.cloned.schedules, 1);
+    assert.ok(clone.data.cloned.media >= 3); // promo + qr + menuboard widget
+    assert.strictEqual(clone.data.org_id, orgId);
+
+    const newVenueId = clone.data.id;
+    const screens = await api('GET', `/api/venues/${newVenueId}/screens`);
+    assert.strictEqual(screens.data.screens.length, 0); // screens never cloned
+
+    // The cloned menuboard widget points at the CLONED menu, not the original.
+    const clonedMenus = (await api('GET', `/api/venues/${newVenueId}/menus`)).data.menus;
+    assert.strictEqual(clonedMenus.length, 1);
+    const clonedMedia = (await api('GET', `/api/venues/${newVenueId}/media`)).data.media;
+    const board = clonedMedia.find((m) => m.type === 'widget' && m.src.startsWith('menuboard:'));
+    assert.ok(board, 'menu board widget cloned');
+    assert.strictEqual(board.src, `menuboard:${clonedMenus[0].id}`);
+
+    // Cloned playlist references the cloned media row.
+    const clonedPlaylists = (await api('GET', `/api/venues/${newVenueId}/playlists`)).data.playlists;
+    assert.strictEqual(clonedPlaylists[0].items.length, 1);
+    assert.notStrictEqual(clonedPlaylists[0].items[0].media_id, mediaId);
+  });
+
+  await t.test('console photo: upload, playlist insert, expiry pruning', async () => {
+    const tokenRes = await api('POST', `/api/venues/${venueId}/remote-token`);
+    remoteToken = tokenRes.data.token;
+
+    // 1x1 PNG
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const q = `name=special.png&playlist_id=${playlistId}&hours=3&label=Tonight%27s%20Special`;
+    const up = await fetch(`${base}/api/remote/${remoteToken}/photo?${q}`, { method: 'POST', body: png });
+    const upData = await up.json();
+    assert.strictEqual(up.status, 201);
+    assert.strictEqual(upData.playlist, 'Main Loop');
+    assert.ok(upData.expires_at > db.now());
+
+    // Wrong playlist (another venue's) is rejected.
+    const otherPl = db.get('SELECT id FROM playlists WHERE venue_id != ?', venueId);
+    if (otherPl) {
+      const bad = await fetch(`${base}/api/remote/${remoteToken}/photo?name=x.png&playlist_id=${otherPl.id}`, { method: 'POST', body: png });
+      assert.strictEqual(bad.status, 400);
+    }
+
+    // It plays now…
+    const items = (await api('GET', `/api/venues/${venueId}/playlists`)).data.playlists
+      .find((p) => p.id === playlistId).items;
+    assert.ok(items.some((i) => i.media_id === upData.media_id));
+
+    // …and disappears once expired: manifest filter + pruning.
+    db.run('UPDATE media SET expires_at = ? WHERE id = ?', new Date(Date.now() - 1000).toISOString(), upData.media_id);
+    const manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    const manifestIds = ((manifest.data.playlist && manifest.data.playlist.items) || []).map((i) => i.media_id);
+    assert.ok(!manifestIds.includes(upData.media_id), 'expired media filtered from manifest');
+
+    const fileOnDisk = path.join(tmp, 'uploads', path.basename(db.get('SELECT src FROM media WHERE id = ?', upData.media_id).src));
+    assert.ok(fs.existsSync(fileOnDisk));
+    const pruned = require('../src/monitor').pruneExpiredMedia();
+    assert.ok(pruned >= 1);
+    assert.strictEqual(db.get('SELECT id FROM media WHERE id = ?', upData.media_id), undefined);
+    assert.ok(!fs.existsSync(fileOnDisk), 'expired upload removed from disk');
+  });
+
+  await t.test('nightly backup writes a snapshot and is idempotent per day', async () => {
+    const monitor = require('../src/monitor');
+    const file = monitor.runBackup();
+    assert.ok(file && fs.existsSync(file));
+    const header = Buffer.alloc(16);
+    fs.readSync(fs.openSync(file, 'r'), header, 0, 16, 0);
+    assert.strictEqual(header.toString('utf8', 0, 15), 'SQLite format 3');
+    assert.strictEqual(monitor.runBackup(), file); // same day -> same file, no churn
+    const backupEvents = db.all("SELECT * FROM events WHERE type = 'backup.created'");
+    assert.strictEqual(backupEvents.length, 1);
+    assert.strictEqual(backupEvents[0].actor, 'system');
+  });
+
+  await t.test('/qr generates codes locally; mailer degrades gracefully', async () => {
+    const res = await fetch(`${base}/qr`);
+    assert.strictEqual(res.status, 400);
+
+    const ok = await fetch(`${base}/qr?data=${encodeURIComponent('https://thetavern.com.au/menu')}`);
+    assert.strictEqual(ok.status, 200);
+    assert.match(ok.headers.get('content-type'), /image\/svg/);
+    const svg = await ok.text();
+    assert.match(svg, /^<svg /);
+    assert.ok(svg.includes('<rect'), 'has modules');
+
+    // structural sanity straight from the encoder
+    const { qrMatrix } = require('../src/qrcode');
+    const m = qrMatrix('HELLO');
+    assert.strictEqual(m.length, 21); // version 1 is 21x21
+    // finder pattern corners are dark
+    assert.strictEqual(m[0][0], 1);
+    assert.strictEqual(m[0][20], 1);
+    assert.strictEqual(m[20][0], 1);
+    assert.throws(() => qrMatrix('x'.repeat(500)), /too long/);
+    const mailer = require('../src/mailer');
+    assert.strictEqual(mailer.configured(), false);
+    const sent = await mailer.sendMail({ to: 'x@y.z', subject: 'hi', text: 'hello' });
+    assert.deepStrictEqual(sent, { skipped: true });
+  });
+});

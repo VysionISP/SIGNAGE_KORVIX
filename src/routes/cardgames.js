@@ -10,6 +10,9 @@ const { sendJson, readJson, HttpError } = require('../util');
 const { nudgeVenue } = require('./admin');
 const cashking = require('../cardgame');
 
+// Audit-trail attribution ('API token' for the legacy env key).
+const actorOf = (req) => req.user?.email || req.user?.name || null;
+
 const routes = [];
 function route(method, pattern, handler) { routes.push({ method, pattern, handler }); }
 
@@ -40,7 +43,7 @@ route('POST', '/api/venues/:venueId/card-games', async (req, res, params) => {
     throw new HttpError(409, `"${existing.name}" is still running — archive it or find the Joker first`);
   }
   const game = cashking.createGame(params.venueId, body);
-  db.logEvent('cashking.created', { venueId: params.venueId, detail: `${game.name} @ $${game.jackpot_start}` });
+  db.logEvent('cashking.created', { venueId: params.venueId, detail: `${game.name} @ $${game.jackpot_start}`, actor: actorOf(req) });
   cashking.fireWebhook(game, venue.name, 'created');
   nudgeVenue(params.venueId);
   sendJson(res, 201, { ...cashking.boardView(game), public_token: game.public_token });
@@ -67,7 +70,7 @@ route('POST', '/api/card-games/:id/live', (req, res, params) => {
   auth.assertVenue(req.user, game.venue_id, 'editor');
   if (game.status === 'archived') throw new HttpError(409, 'game is archived');
   db.run('UPDATE card_games SET live = 1 WHERE id = ?', game.id);
-  db.logEvent('cashking.live', { venueId: game.venue_id, detail: game.name });
+  db.logEvent('cashking.live', { venueId: game.venue_id, detail: game.name, actor: actorOf(req) });
   cashking.fireWebhook(gameById(game.id), venueName(game.venue_id), 'live');
   nudgeVenue(game.venue_id);
   sendJson(res, 200, cashking.boardView(gameById(game.id)));
@@ -77,7 +80,7 @@ route('POST', '/api/card-games/:id/end-session', (req, res, params) => {
   const game = gameById(params.id);
   auth.assertVenue(req.user, game.venue_id, 'editor');
   db.run('UPDATE card_games SET live = 0 WHERE id = ?', game.id);
-  db.logEvent('cashking.session_ended', { venueId: game.venue_id, detail: game.name });
+  db.logEvent('cashking.session_ended', { venueId: game.venue_id, detail: game.name, actor: actorOf(req) });
   nudgeVenue(game.venue_id);
   sendJson(res, 200, cashking.boardView(gameById(game.id)));
 });
@@ -94,6 +97,7 @@ route('POST', '/api/card-games/:id/pick', async (req, res, params) => {
     venueId: game.venue_id,
     detail: `${updated.name}: #${index + 1} was ${cashking.prettyCard(JSON.parse(updated.last_pick).card)}`
       + (wasJoker ? ` — $${updated.jackpot_current} WON` : ''),
+    actor: actorOf(req),
   });
   cashking.fireWebhook(updated, vName, wasJoker ? 'won' : 'miss');
   nudgeVenue(game.venue_id);

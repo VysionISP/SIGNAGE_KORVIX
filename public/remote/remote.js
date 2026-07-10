@@ -54,7 +54,7 @@
 
   async function load() {
     if (!token) {
-      showError('No access link. Ask your manager for the games console link from the Korvix dashboard.', true);
+      showError('No access link. Ask your manager for the games console link from the signage dashboard.', true);
       return;
     }
     try {
@@ -82,10 +82,15 @@
     if (active && $('views').contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) return;
 
     $('venue-name').textContent = state.venue.name;
+    if (state.brand) {
+      document.title = `${state.brand} Games`;
+      const brandEl = document.querySelector('.brand');
+      if (brandEl) brandEl.textContent = state.brand.split(' ')[0].toUpperCase();
+    }
     renderBanner();
     const views = {
       home: homeHtml, cashking: cashkingHtml, draws: drawsHtml,
-      wheel: wheelHtml, badge: badgeHtml, emergency: emergencyHtml,
+      wheel: wheelHtml, badge: badgeHtml, emergency: emergencyHtml, photo: photoHtml,
     };
     $('views').innerHTML = (views[view] || homeHtml)();
     freshNumbers.clear();
@@ -99,7 +104,7 @@
     banner.innerHTML = `🚨 ${esc(em.level.toUpperCase())}: ${esc(em.title)} — LIVE ON ALL SCREENS` +
       (em.venue_scoped
         ? '<button class="btn-clear" data-em-clear style="margin-top:12px;background:#fff;color:#7f1d1d;font-weight:800">✅ ALL CLEAR — end broadcast</button>'
-        : '<div style="font-size:13px;font-weight:400;margin-top:8px;opacity:.9">Issued by Korvix for all venues — it will be cleared centrally.</div>');
+        : '<div style="font-size:13px;font-weight:400;margin-top:8px;opacity:.9">Issued centrally for all venues — it will be cleared centrally.</div>');
   }
 
   const backBtn = '<button class="back" data-nav="home">← All games</button>';
@@ -139,6 +144,11 @@
         <span><span class="t-title">Badge Draw</span><br><span class="t-sub">${state.badge_draw
           ? `${moneyAud(state.badge_draw.prize)} pot · ${state.badge_draw.members_count.toLocaleString()} members${state.badge_draw.live ? ' · LIVE' : ''}`
           : 'Tap to set up the members draw'}</span></span>
+        <span class="t-go">›</span>
+      </button>
+      <button class="tile" data-nav="photo">
+        <span class="emoji">📸</span>
+        <span><span class="t-title">Photo to Screens</span><br><span class="t-sub">Snap tonight's special — it joins the ad loop, then removes itself</span></span>
         <span class="t-go">›</span>
       </button>
       <button class="tile em ${state.emergency ? 'active' : ''}" data-nav="emergency">
@@ -311,6 +321,53 @@
       </div>`;
   }
 
+  // ---- Photo to screens view ----------------------------------------------------
+
+  // Survives the 5s poll re-render: the chosen file and field values live here,
+  // not in the DOM.
+  const photoForm = { file: null, label: '', playlist: '', hours: '24' };
+
+  function photoHtml() {
+    if (!state.playlists || !state.playlists.length) {
+      return `${backBtn}
+      <div class="card">
+        <h2>📸 Photo to screens</h2>
+        <div class="muted">This venue has no playlists yet — set one up in the dashboard first, then photos can drop straight into it.</div>
+      </div>`;
+    }
+    const opts = state.playlists.map((p) =>
+      `<option value="${esc(p.id)}" ${photoForm.playlist === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+    const hourOpts = [['3', '3 hours'], ['6', '6 hours'], ['12', '12 hours'], ['24', '24 hours'], ['72', '3 days'], ['168', '1 week']]
+      .map(([v, t]) => `<option value="${v}" ${photoForm.hours === v ? 'selected' : ''}>${t}</option>`).join('');
+    return `${backBtn}
+      <div class="card">
+        <h2>📸 Photo to screens</h2>
+        <div class="muted">Take a photo (or pick one) and it slots into a playlist on the big screens, then quietly removes itself.</div>
+        <label class="btn-new" style="display:block;text-align:center;cursor:pointer">
+          ${photoForm.file ? `✓ ${esc(photoForm.file.name)}` : '📷 Take / choose photo'}
+          <input id="ph-file" type="file" accept="image/*" capture="environment" style="display:none">
+        </label>
+        <input id="ph-label" placeholder="Caption for the media library — e.g. Tonight's special" value="${esc(photoForm.label)}">
+        <div class="range-row">
+          <label>Show in <select id="ph-playlist"><option value="">— pick playlist —</option>${opts}</select></label>
+          <label>For <select id="ph-hours">${hourOpts}</select></label>
+        </div>
+        <button class="btn-live" data-ph-send ${photoForm.file ? '' : 'disabled style="opacity:.5"'}>📺 Put it on the screens</button>
+      </div>`;
+  }
+
+  document.body.addEventListener('change', (e) => {
+    if (e.target.id === 'ph-file' && e.target.files && e.target.files[0]) {
+      photoForm.file = e.target.files[0];
+      render();
+    }
+    if (e.target.id === 'ph-playlist') photoForm.playlist = e.target.value;
+    if (e.target.id === 'ph-hours') photoForm.hours = e.target.value;
+  });
+  document.body.addEventListener('input', (e) => {
+    if (e.target.id === 'ph-label') photoForm.label = e.target.value;
+  });
+
   // ---- actions (all delegated so re-renders never lose handlers) ---------------------
 
   document.body.addEventListener('click', async (e) => {
@@ -340,8 +397,9 @@
     const bdEnd = e.target.closest('[data-bd-end]');
     const bdDraw = e.target.closest('[data-bd-draw]');
     const bdOutcome = e.target.closest('[data-bd-outcome]');
+    const phSend = e.target.closest('[data-ph-send]');
     if (!spin && !clear && !ckPick && !ckAct && !ckArchive && !ckNew && !ndAdd && !emLevel && !emClear && !returnAds
-      && !whNew && !whLive && !whEnd && !whSpin && !bdNew && !bdLive && !bdEnd && !bdDraw && !bdOutcome) return;
+      && !whNew && !whLive && !whEnd && !whSpin && !bdNew && !bdLive && !bdEnd && !bdDraw && !bdOutcome && !phSend) return;
     if (busy) return;
     busy = true;
     try {
@@ -425,6 +483,25 @@
       } else if (bdDraw) {
         if (navigator.vibrate) navigator.vibrate(80);
         await api('POST', `/api/remote/${token}/badge-draws/${state.badge_draw.id}/draw`);
+      } else if (phSend) {
+        if (!photoForm.file) { flashError('Choose a photo first.'); busy = false; return; }
+        if (!photoForm.playlist) { flashError('Pick which playlist it should appear in.'); busy = false; return; }
+        phSend.textContent = 'Sending…';
+        const q = new URLSearchParams({
+          name: photoForm.file.name || 'photo.jpg',
+          playlist_id: photoForm.playlist,
+          hours: photoForm.hours,
+          label: photoForm.label,
+        });
+        const resp = await fetch(`/api/remote/${token}/photo?${q}`, { method: 'POST', body: photoForm.file });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || `upload failed (${resp.status})`);
+        photoForm.file = null;
+        photoForm.label = '';
+        phSend.textContent = '✓ On the screens!';
+        if (navigator.vibrate) navigator.vibrate(80);
+        holdRenderUntil = Date.now() + 1600;
+        setTimeout(() => { holdRenderUntil = 0; render(); }, 1700);
       } else if (bdOutcome) {
         const claimed = bdOutcome.dataset.bdOutcome === '1';
         if (!confirm(claimed ? 'Confirm: winner is here and claims the prize?' : 'Confirm: no show — jackpot the pot?')) { busy = false; return; }
