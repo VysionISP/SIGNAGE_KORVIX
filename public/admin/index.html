@@ -29,6 +29,10 @@
     cursor: pointer; font: inherit; border-bottom: 2px solid transparent;
   }
   nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  #subnav { display: none; gap: 4px; padding: 4px 20px; border-bottom: 1px solid var(--line); background: var(--panel2); flex-wrap: wrap; }
+  #subnav.show { display: flex; }
+  #subnav button { padding: 7px 12px; font-size: 13px; border-radius: 6px; border-bottom: none; }
+  #subnav button.active { background: var(--panel); color: var(--text); }
 
   main { padding: 20px; max-width: 1200px; margin: 0 auto; }
   section.tab { display: none; }
@@ -135,20 +139,8 @@
     <div class="userchip" id="user-chip"></div>
     <button class="btn small secondary" id="logout-btn" style="display:none">Sign out</button>
   </header>
-  <nav id="nav">
-    <button data-tab="overview" class="active">Overview</button>
-    <button data-tab="screens">Screens</button>
-    <button data-tab="content">Content</button>
-    <button data-tab="playlists">Playlists</button>
-    <button data-tab="schedules">Schedules</button>
-    <button data-tab="draws">Draws</button>
-    <button data-tab="cashking">CashKing</button>
-    <button data-tab="emergency">Emergency</button>
-    <button data-tab="integrations">Integrations</button>
-    <button data-tab="reports">Reports</button>
-    <button data-tab="users" data-minrole="admin">Users</button>
-    <button data-tab="orgs" data-minrole="superadmin">Businesses</button>
-  </nav>
+  <nav id="nav"></nav>
+  <nav id="subnav"></nav>
   <main>
     <section class="tab active" id="tab-overview"></section>
     <section class="tab" id="tab-screens"></section>

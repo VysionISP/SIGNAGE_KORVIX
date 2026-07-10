@@ -86,10 +86,8 @@
   function applyRoleUi() {
     $('#user-chip').textContent = me ? `${me.name || me.email} · ${me.role}${me.org_name ? ' @ ' + me.org_name : ' @ Korvix'}` : '';
     $('#logout-btn').style.display = me && me.id !== '_legacy' ? '' : 'none';
-    document.querySelectorAll('#nav button[data-minrole]').forEach((b) => {
-      b.style.display = hasRole(b.dataset.minrole) ? '' : 'none';
-    });
     $('#add-venue-btn').style.display = hasRole('admin') ? '' : 'none';
+    renderNav();
   }
 
   async function enterApp() {
@@ -144,15 +142,63 @@
     await refresh();
   });
 
-  $('#nav').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-tab]');
-    if (!btn) return;
-    activeTab = btn.dataset.tab;
-    document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b === btn));
+  // ---- navigation: top-level sections with sub-pages -------------------------
+
+  const NAV = [
+    { tab: 'overview', label: 'Overview' },
+    { tab: 'screens', label: 'Screens' },
+    { label: 'Media', tabs: [['content', 'Content'], ['playlists', 'Playlists'], ['schedules', 'Schedules']] },
+    { label: 'Games', tabs: [['draws', 'Draws'], ['cashking', 'CashKing']] },
+    { tab: 'emergency', label: 'Emergency' },
+    {
+      label: 'Settings',
+      tabs: [['integrations', 'Integrations'], ['reports', 'Reports'],
+        ['users', 'Users', 'admin'], ['orgs', 'Businesses', 'superadmin']],
+    },
+  ];
+
+  function navGroupOf(tab) {
+    return NAV.find((n) => n.tabs && n.tabs.some(([t]) => t === tab)) || null;
+  }
+  function visibleTabs(group) {
+    return group.tabs.filter(([, , minRole]) => !minRole || hasRole(minRole));
+  }
+
+  function renderNav() {
+    const group = navGroupOf(activeTab);
+    $('#nav').innerHTML = NAV.map((n) => {
+      if (n.tabs && !visibleTabs(n).length) return '';
+      const active = n.tab ? n.tab === activeTab : n === group;
+      return `<button data-nav="${n.tab || n.label}" class="${active ? 'active' : ''}">${n.label}</button>`;
+    }).join('');
+    const subnav = $('#subnav');
+    if (group) {
+      subnav.className = 'show';
+      subnav.innerHTML = visibleTabs(group).map(([tab, label]) =>
+        `<button data-nav="${tab}" class="${tab === activeTab ? 'active' : ''}">${label}</button>`).join('');
+    } else {
+      subnav.className = '';
+      subnav.innerHTML = '';
+    }
     document.querySelectorAll('section.tab').forEach((s) =>
       s.classList.toggle('active', s.id === `tab-${activeTab}`));
+  }
+
+  function goTab(tab) {
+    activeTab = tab;
+    renderNav();
     render();
-  });
+  }
+
+  const navClick = (e) => {
+    const btn = e.target.closest('button[data-nav]');
+    if (!btn) return;
+    const target = btn.dataset.nav;
+    const group = NAV.find((n) => n.tabs && n.label === target);
+    goTab(group ? visibleTabs(group)[0][0] : target);
+  };
+  $('#nav').addEventListener('click', navClick);
+  $('#subnav').addEventListener('click', navClick);
 
   async function refresh() {
     await loadVenues();
