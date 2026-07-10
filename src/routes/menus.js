@@ -15,7 +15,7 @@ const { nudgeVenue } = require('./admin');
 const routes = [];
 function route(method, pattern, handler) { routes.push({ method, pattern, handler }); }
 
-const THEMES = new Set(['classic', 'chalkboard', 'modern', 'pub']);
+const THEMES = new Set(['classic', 'chalkboard', 'modern', 'pub', 'coastal', 'neon', 'minimal', 'cafe']);
 
 function cleanSections(raw) {
   if (!Array.isArray(raw)) throw new HttpError(400, 'sections must be an array');

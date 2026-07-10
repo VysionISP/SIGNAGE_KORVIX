@@ -375,26 +375,55 @@
 
   // Designed menu board: themed, with optional item photos and the venue
   // logo up top. Data lives in manifest.menus / manifest.venue.logo.
+  // rule/titleRule are full border-bottom shorthands; frame wraps the whole
+  // board; nameExtra/sectionExtra are appended CSS for glow/texture effects.
   const MENU_THEMES = {
     classic: {
       bg: 'linear-gradient(160deg,#1c1410,#0d0906)', font: 'system-ui,sans-serif',
-      name: '#fff', section: '#fbbf24', rule: '#fbbf2488', text: '#fff',
-      muted: 'rgba(255,255,255,.75)', leader: 'rgba(255,255,255,.35)', sold: '#f87171',
+      name: '#fff', section: '#fbbf24', rule: '.15vh solid #fbbf2488', titleRule: '.3vh double #fbbf2488',
+      text: '#fff', muted: 'rgba(255,255,255,.75)', leader: 'rgba(255,255,255,.35)', sold: '#f87171',
     },
     chalkboard: {
-      bg: 'radial-gradient(ellipse at top,#233329,#0f1a13)', font: "'Segoe Print','Comic Sans MS',cursive",
-      name: '#f8fafc', section: '#a7f3d0', rule: '#a7f3d066', text: '#f1f5f9',
-      muted: 'rgba(241,245,249,.7)', leader: 'rgba(241,245,249,.3)', sold: '#fca5a5',
+      bg: 'radial-gradient(ellipse at 30% 15%,#2b2d31 0%,#1a1b1e 55%,#0f1012 100%)',
+      font: "'Chalkboard SE','Segoe Print','Bradley Hand','Comic Sans MS',cursive",
+      name: '#f5f5f4', section: '#fde68a', rule: '.25vh dashed rgba(253,230,138,.55)', titleRule: '.25vh dashed rgba(245,245,244,.5)',
+      text: '#e7e5e4', muted: 'rgba(231,229,228,.65)', leader: 'rgba(231,229,228,.3)', sold: '#fca5a5',
+      frame: 'border:1.5vh solid #6d4c33;box-shadow:inset 0 0 7vh rgba(0,0,0,.6);box-sizing:border-box;',
+      nameExtra: 'text-shadow:0 0 .7vh rgba(255,255,255,.3);',
+      sectionExtra: 'text-shadow:0 0 .5vh rgba(253,230,138,.35);',
     },
     modern: {
       bg: 'linear-gradient(160deg,#faf7f2,#ece5d8)', font: 'system-ui,sans-serif',
-      name: '#1c1917', section: '#c2410c', rule: '#c2410c66', text: '#292524',
-      muted: 'rgba(41,37,36,.65)', leader: 'rgba(41,37,36,.3)', sold: '#dc2626',
+      name: '#1c1917', section: '#c2410c', rule: '.15vh solid #c2410c66', titleRule: '.2vh solid #c2410c66',
+      text: '#292524', muted: 'rgba(41,37,36,.65)', leader: 'rgba(41,37,36,.3)', sold: '#dc2626',
     },
     pub: {
       bg: 'linear-gradient(160deg,#3b1212,#190707)', font: "Georgia,'Times New Roman',serif",
-      name: '#fde68a', section: '#fde68a', rule: '#fde68a66', text: '#fef3c7',
-      muted: 'rgba(254,243,199,.7)', leader: 'rgba(254,243,199,.3)', sold: '#fca5a5',
+      name: '#fde68a', section: '#fde68a', rule: '.15vh solid #fde68a66', titleRule: '.3vh double #fde68a66',
+      text: '#fef3c7', muted: 'rgba(254,243,199,.7)', leader: 'rgba(254,243,199,.3)', sold: '#fca5a5',
+    },
+    coastal: {
+      bg: 'linear-gradient(165deg,#f0f9ff,#dbeafe 55%,#e0f2fe)', font: 'system-ui,sans-serif',
+      name: '#0c4a6e', section: '#0284c7', rule: '.15vh solid #0284c766', titleRule: '.3vh double #0c4a6e55',
+      text: '#0f172a', muted: 'rgba(15,23,42,.6)', leader: 'rgba(15,23,42,.3)', sold: '#dc2626',
+    },
+    neon: {
+      bg: 'radial-gradient(ellipse at top,#1a1033,#0a0614 75%)', font: 'system-ui,sans-serif',
+      name: '#22d3ee', section: '#f472b6', rule: '.15vh solid #f472b688', titleRule: '.2vh solid #22d3ee66',
+      text: '#f8fafc', muted: 'rgba(248,250,252,.7)', leader: 'rgba(244,114,182,.4)', sold: '#facc15',
+      nameExtra: 'text-shadow:0 0 1vw #22d3ee,0 0 3vw rgba(34,211,238,.5);',
+      sectionExtra: 'text-shadow:0 0 .8vw rgba(244,114,182,.8);',
+    },
+    minimal: {
+      bg: '#0a0a0a', font: 'system-ui,sans-serif',
+      name: '#fafafa', section: '#fafafa', rule: '.1vh solid rgba(250,250,250,.35)', titleRule: '.1vh solid rgba(250,250,250,.5)',
+      text: '#e5e5e5', muted: 'rgba(229,229,229,.55)', leader: 'rgba(229,229,229,.2)', sold: '#a3a3a3',
+      sectionExtra: 'letter-spacing:.35em;font-weight:600;',
+    },
+    cafe: {
+      bg: 'linear-gradient(160deg,#efe4d3,#e0cdb2)', font: "Georgia,'Times New Roman',serif",
+      name: '#4a2e19', section: '#7c4a22', rule: '.15vh solid #7c4a2266', titleRule: '.3vh double #4a2e1966',
+      text: '#3c2a1a', muted: 'rgba(60,42,26,.65)', leader: 'rgba(60,42,26,.3)', sold: '#b91c1c',
     },
   };
 
@@ -409,7 +438,7 @@
       ? `<img src="${esc(manifest.venue.logo)}" style="max-height:9vh;max-width:26vw;object-fit:contain;margin-bottom:1vh">` : '';
     const sectionsHtml = menu.sections.map((section) => `
       <div style="break-inside:avoid;margin-bottom:2.6vh;text-align:left">
-        <div style="font-size:2.4vw;font-weight:800;letter-spacing:.14em;color:${T.section};border-bottom:.15vh solid ${T.rule};padding-bottom:.6vh;margin-bottom:1.2vh;text-transform:uppercase">${esc(section.title)}</div>
+        <div style="font-size:2.4vw;font-weight:800;letter-spacing:.14em;color:${T.section};border-bottom:${T.rule};padding-bottom:.6vh;margin-bottom:1.2vh;text-transform:uppercase;${T.sectionExtra || ''}">${esc(section.title)}</div>
         ${section.items.map((item) => `
           <div style="margin-bottom:1.2vh;${item.sold_out ? 'opacity:.45' : ''};display:flex;gap:.9vw;align-items:flex-start">
             ${item.photo ? `<img src="${esc(item.photo)}" style="width:6.5vh;height:6.5vh;object-fit:cover;border-radius:.8vh;flex-shrink:0;box-shadow:0 .3vh .8vh rgba(0,0,0,.35)">` : ''}
@@ -425,9 +454,9 @@
           </div>`).join('')}
       </div>`).join('');
     const cols = menu.sections.length >= 3 ? 3 : menu.sections.length === 2 ? 2 : 1;
-    return `<div class="widget" style="background:${T.bg};color:${T.text};font-family:${T.font};justify-content:flex-start;padding:3vh 4vw">
+    return `<div class="widget" style="background:${T.bg};color:${T.text};font-family:${T.font};justify-content:flex-start;padding:3vh 4vw;${T.frame || ''}">
       ${logo}
-      <div style="font-size:3.6vw;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-bottom:2.4vh;border-bottom:.3vh double ${T.rule};padding-bottom:1vh;width:100%;text-align:center;color:${T.name}">${esc(menu.name)}</div>
+      <div style="font-size:3.6vw;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-bottom:2.4vh;border-bottom:${T.titleRule};padding-bottom:1vh;width:100%;text-align:center;color:${T.name};${T.nameExtra || ''}">${esc(menu.name)}</div>
       <div style="columns:${cols};column-gap:3.5vw;width:100%;flex:1;overflow:hidden">${sectionsHtml}</div>
     </div>`;
   }

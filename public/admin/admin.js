@@ -749,8 +749,10 @@
     </div>`;
 
   const MENU_THEME_OPTIONS = [
-    ['classic', 'Classic — dark & gold'], ['chalkboard', 'Chalkboard'],
-    ['modern', 'Modern — light'], ['pub', 'Old Pub — deep red'],
+    ['classic', 'Classic — dark & gold'], ['chalkboard', 'Chalkboard — timber frame'],
+    ['modern', 'Modern — light & coral'], ['pub', 'Old Pub — deep red serif'],
+    ['coastal', 'Coastal — light blue'], ['neon', 'Neon — cocktail bar'],
+    ['minimal', 'Minimal — black & white'], ['cafe', 'Café — warm paper'],
   ];
 
   const sectionHtml = (section = { title: '', items: [{}] }) => `
