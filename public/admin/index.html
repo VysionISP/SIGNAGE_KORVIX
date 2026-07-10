@@ -70,6 +70,31 @@
   .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0; align-items: end; }
   .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 
+  /* Media gallery (Content tab) */
+  .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 14px; }
+  .mcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; position: relative; }
+  .mcard .mthumb { height: 120px; width: 100%; background: #0a0f1c; display: flex; align-items: center; justify-content: center; font-size: 38px; position: relative; }
+  .mcard .mthumb img, .mcard .mthumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .mcard .mdur {
+    position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.65); color: #fff;
+    font-size: 11px; padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  }
+  .mcard .mdel {
+    position: absolute; right: 6px; top: 6px; background: rgba(0,0,0,.55); color: #fca5a5; border: none;
+    border-radius: 999px; width: 26px; height: 26px; cursor: pointer; font-size: 13px; line-height: 1;
+  }
+  .mcard .mbody { padding: 10px 12px 12px; }
+  .mcard .mname { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .mcard .mrow { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .chip { font-size: 11px; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; color: var(--muted); }
+  .chip.on { color: var(--good); border-color: #14532d; background: #052e16; }
+  .mwhere { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; display: none; }
+  .mwhere.open { display: block; }
+  .mwhere label { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 4px 0; cursor: pointer; }
+  details.adv { margin-top: 22px; }
+  details.adv > summary { cursor: pointer; color: var(--muted); font-weight: 600; padding: 6px 0; }
+  #upload-hint { display: none; background: #052e16; color: var(--good); border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-weight: 600; }
+
   #emergency-banner {
     display: none; background: #7f1d1d; color: #fff; padding: 10px 20px;
     font-weight: 700; text-align: center;

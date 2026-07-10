@@ -403,79 +403,119 @@
     if (failed.length) alert('Some uploads failed:\n' + failed.join('\n'));
   }
 
+  // "Where it plays" panels that stay open across re-renders.
+  const whereOpen = new Set();
+
   async function renderContent() {
-    const [{ media }, uploads] = await Promise.all([
+    const [{ media }, uploads, { playlists }] = await Promise.all([
       api('GET', `/api/venues/${venueId}/media`),
       api('GET', '/api/uploads'),
+      api('GET', `/api/venues/${venueId}/playlists`),
     ]);
     const mb = (bytes) => (bytes / 1024 / 1024).toFixed(1) + ' MB';
 
+    // media_id -> [{playlist, itemId}] so tick-boxes can add/remove directly.
+    const playsIn = new Map();
+    for (const p of playlists) {
+      for (const item of p.items) {
+        if (!playsIn.has(item.media_id)) playsIn.set(item.media_id, []);
+        playsIn.get(item.media_id).push({ playlist: p, itemId: item.id });
+      }
+    }
+
+    const card = (m) => {
+      const inLists = playsIn.get(m.id) || [];
+      const isFile = m.type === 'image' || m.type === 'video';
+      return `
+      <div class="mcard">
+        <div class="mthumb">
+          ${m.type === 'image' ? `<img src="${esc(m.src)}" loading="lazy">`
+            : m.type === 'video' ? `<video src="${esc(m.src)}" preload="metadata" muted></video>`
+              : ({ html: '📝', widget: '📊', url: '🌐' }[m.type] || '🖼')}
+          <button class="mdel" data-del="${m.id}" title="Delete">✕</button>
+          <span class="mdur" data-dur="${m.id}" data-cur="${m.duration_seconds}" title="Seconds on screen — click to change">${m.duration_seconds}s</span>
+        </div>
+        <div class="mbody">
+          <div class="mname" data-rename="${m.id}" data-cur="${esc(m.name)}" title="Click to rename">${esc(m.name)}</div>
+          <div class="mrow">
+            ${inLists.length
+              ? inLists.map((x) => `<span class="chip on">▶ ${esc(x.playlist.name)}</span>`).join('')
+              : '<span class="chip" style="color:var(--warn)">not on any screens yet</span>'}
+          </div>
+          <div class="mrow">
+            <button class="btn small secondary" data-where="${m.id}">Where it plays ▾</button>
+            ${isFile ? `<button class="btn small secondary" data-fit="${m.id}" data-cur="${m.fit || 'cover'}"
+              title="Fill screen crops to fit · Show all letterboxes">${(m.fit || 'cover') === 'cover' ? '↔ Fill screen' : '▣ Show all'}</button>` : ''}
+          </div>
+          <div class="mwhere ${whereOpen.has(m.id) ? 'open' : ''}" data-wherepanel="${m.id}">
+            ${playlists.length ? playlists.map((p) => {
+              const hit = inLists.find((x) => x.playlist.id === p.id);
+              return `<label><input type="checkbox" data-toggle="${m.id}" data-pl="${p.id}" data-item="${hit ? hit.itemId : ''}" ${hit ? 'checked' : ''}>
+                ${esc(p.name)}</label>`;
+            }).join('')
+              : `<div class="muted" style="font-size:12px">No playlists yet.</div>
+                 <button class="btn small" data-mkloop="${m.id}" style="margin-top:6px">▶ Play on all screens (creates "Main loop")</button>`}
+          </div>
+        </div>
+      </div>`;
+    };
+
     $('#tab-content').innerHTML = `
-      <h2>Upload your graphics</h2>
-      <div id="dropzone" class="card" style="border:2px dashed var(--line);text-align:center;padding:34px;cursor:pointer">
+      <div id="dropzone" class="card" style="border:2px dashed var(--line);text-align:center;padding:34px;cursor:pointer;margin-top:0">
         <div style="font-size:32px">🖼️</div>
-        <div style="margin:6px 0"><b>Drag &amp; drop images or videos here</b> — or click to choose files</div>
-        <div class="muted">JPG, PNG, WebP, GIF, SVG, MP4, WebM · up to 200 MB each ·
-        each file becomes a media item ready to add to playlists</div>
+        <div style="margin:6px 0;font-size:16px"><b>Drop your posters, menus or videos here</b> — or click to choose files</div>
+        <div class="muted">JPG, PNG, GIF, MP4… up to 200 MB each. Then tick where each one plays.</div>
         <input id="dz-input" type="file" accept="image/*,video/*" multiple style="display:none">
       </div>
       <div id="dz-progress" class="muted" style="margin:8px 2px"></div>
+      <div id="upload-hint">✓ Uploaded! Tick where each new graphic should play — it goes live on those screens straight away.</div>
 
-      <h2>Media library</h2>
-      <table>
-        <thead><tr><th></th><th>Name</th><th>Type</th><th>Duration</th><th>Sizing</th><th></th></tr></thead>
-        <tbody>${media.map((m) => `
-          <tr>
-            <td style="width:96px">${mediaThumb(m)}</td>
-            <td>${esc(m.name)}<div class="muted" style="font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.type === 'html' ? '(inline slide)' : esc(m.src)}</div></td>
-            <td><span class="pill level-notice">${esc(m.type)}</span></td>
-            <td class="muted">${m.duration_seconds}s</td>
-            <td>${m.type === 'image' || m.type === 'video'
-              ? `<button class="btn small secondary" data-fit="${m.id}" data-cur="${m.fit || 'cover'}" title="cover = fill the screen (crops) · contain = show the whole graphic (letterbox)">
-                  ${(m.fit || 'cover') === 'cover' ? '↔ Fill screen' : '▣ Show all'}</button>`
-              : '<span class="muted">—</span>'}</td>
-            <td style="text-align:right"><button class="btn small danger" data-del="${m.id}">Delete</button></td>
-          </tr>`).join('') || '<tr><td class="muted" colspan="6">No media yet — drop some graphics above</td></tr>'}
-        </tbody>
-      </table>
+      <h2>Your media <span class="muted" style="font-weight:400;font-size:13px">· click a name to rename · click the seconds badge to change how long it shows</span></h2>
+      <div class="media-grid">
+        ${media.map(card).join('') || '<div class="muted">Nothing here yet — drop some graphics above.</div>'}
+      </div>
 
-      <h2>Uploaded files <span class="muted" style="font-weight:400;font-size:13px">· ${mb(uploads.total_bytes)} on disk</span></h2>
-      <table>
-        <tbody>${uploads.files.map((f) => `
-          <tr>
-            <td><a href="${esc(f.url)}" target="_blank">${esc(f.name)}</a></td>
-            <td class="muted">${mb(f.bytes)}</td>
-            <td class="muted">${new Date(f.uploaded_at).toLocaleString()}</td>
-            <td>${f.used_by.length
-              ? `<span class="pill online">in use: ${esc(f.used_by.map((u) => u.name).join(', ')).slice(0, 60)}</span>`
-              : '<span class="pill never-connected">unused</span>'}</td>
-            <td style="text-align:right"><button class="btn small danger" data-delfile="${esc(f.name)}" data-used="${f.used_by.length}">Delete file</button></td>
-          </tr>`).join('') || '<tr><td class="muted">Nothing uploaded yet</td></tr>'}
-        </tbody>
-      </table>
-
-      <h2>Add media by URL or slide</h2>
-      <div class="card">
-        <div class="form-grid">
-          <label>Name<input id="md-name" placeholder="Happy hour promo"></label>
-          <label>Type<select id="md-type">
-            <option value="image">image — URL or upload</option>
-            <option value="video">video — URL or upload</option>
-            <option value="url">url — live web page</option>
-            <option value="html">html — inline slide</option>
-            <option value="widget">widget — live data</option>
-          </select></label>
-          <label>Duration (seconds)<input id="md-dur" type="number" value="10" min="1"></label>
+      <details class="adv">
+        <summary>Advanced: add by web address, HTML slide or live widget</summary>
+        <div class="card">
+          <div class="form-grid">
+            <label>Name<input id="md-name" placeholder="Happy hour promo"></label>
+            <label>Type<select id="md-type">
+              <option value="image">image — URL or upload</option>
+              <option value="video">video — URL or upload</option>
+              <option value="url">url — live web page</option>
+              <option value="html">html — inline slide</option>
+              <option value="widget">widget — live data</option>
+            </select></label>
+            <label>Duration (seconds)<input id="md-dur" type="number" value="10" min="1"></label>
+          </div>
+          <div class="form-grid">
+            <label id="md-src-wrap">Source URL / widget name
+              <input id="md-src" placeholder="https://… or /uploads/… — widgets: jackpot, menu, weather, sports, racing:1, birthdays, happyhour, cashking, welcome"></label>
+            <label>Or upload a file<input id="md-file" type="file" accept="image/*,video/*"></label>
+          </div>
+          <label style="display:block;margin-bottom:10px" id="md-html-wrap">HTML slide markup
+            <textarea id="md-html" placeholder="&lt;div&gt;…full-screen slide markup…&lt;/div&gt;"></textarea></label>
+          <button class="btn" id="md-add">Add media</button>
         </div>
-        <div class="form-grid">
-          <label id="md-src-wrap">Source URL / widget name
-            <input id="md-src" placeholder="https://… or /uploads/… — widgets: jackpot, menu, weather, sports, birthdays, happyhour, welcome"></label>
-          <label>Or upload a file<input id="md-file" type="file" accept="image/*,video/*"></label>
-        </div>
-        <label style="display:block;margin-bottom:10px" id="md-html-wrap">HTML slide markup
-          <textarea id="md-html" placeholder="&lt;div&gt;…full-screen slide markup…&lt;/div&gt;"></textarea></label>
-        <button class="btn" id="md-add">Add media</button>
-      </div>`;
+      </details>
+
+      <details class="adv">
+        <summary>Storage: uploaded files (${mb(uploads.total_bytes)} on disk)</summary>
+        <table>
+          <tbody>${uploads.files.map((f) => `
+            <tr>
+              <td><a href="${esc(f.url)}" target="_blank">${esc(f.name)}</a></td>
+              <td class="muted">${mb(f.bytes)}</td>
+              <td class="muted">${new Date(f.uploaded_at).toLocaleString()}</td>
+              <td>${f.used_by.length
+                ? `<span class="pill online">in use: ${esc(f.used_by.map((u) => u.name).join(', ')).slice(0, 60)}</span>`
+                : '<span class="pill never-connected">unused</span>'}</td>
+              <td style="text-align:right"><button class="btn small danger" data-delfile="${esc(f.name)}" data-used="${f.used_by.length}">Delete file</button></td>
+            </tr>`).join('') || '<tr><td class="muted">Nothing uploaded yet</td></tr>'}
+          </tbody>
+        </table>
+      </details>`;
 
     $('#md-add').onclick = async () => {
       const name = $('#md-name').value.trim();
@@ -501,9 +541,15 @@
     const handleFiles = async (files) => {
       if (!files.length) return;
       $('#dz-progress').textContent = `Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`;
+      const before = new Set(media.map((m) => m.id));
       await uploadGraphics([...files]);
       $('#dz-progress').textContent = '';
-      render();
+      // Auto-open the "where it plays" panel on everything new.
+      const after = (await api('GET', `/api/venues/${venueId}/media`)).media;
+      after.filter((m) => !before.has(m.id)).forEach((m) => whereOpen.add(m.id));
+      await render();
+      const hint = $('#upload-hint');
+      if (hint) hint.style.display = 'block';
     };
     dropzone.onclick = () => dzInput.click();
     dzInput.onchange = () => handleFiles(dzInput.files);
@@ -540,6 +586,52 @@
         await api('DELETE', `/api/uploads/${encodeURIComponent(delFile.dataset.delfile)}?force=${used ? 1 : 0}`);
         return render();
       }
+      const where = e.target.closest('[data-where]');
+      if (where) {
+        const mediaId = where.dataset.where;
+        if (whereOpen.has(mediaId)) whereOpen.delete(mediaId); else whereOpen.add(mediaId);
+        document.querySelector(`[data-wherepanel="${mediaId}"]`).classList.toggle('open');
+        return;
+      }
+      const dur = e.target.closest('[data-dur]');
+      if (dur) {
+        const secs = prompt('Seconds on screen:', dur.dataset.cur);
+        if (secs && parseInt(secs, 10) > 0) {
+          await api('PATCH', `/api/media/${dur.dataset.dur}`, { duration_seconds: parseInt(secs, 10) });
+          render();
+        }
+        return;
+      }
+      const rename = e.target.closest('[data-rename]');
+      if (rename) {
+        const name = prompt('Name:', rename.dataset.cur);
+        if (name && name.trim()) {
+          await api('PATCH', `/api/media/${rename.dataset.rename}`, { name: name.trim() });
+          render();
+        }
+        return;
+      }
+      const mkloop = e.target.closest('[data-mkloop]');
+      if (mkloop) {
+        // First-run helper: one playlist playing on every screen, all day.
+        const playlist = await api('POST', `/api/venues/${venueId}/playlists`, { name: 'Main loop' });
+        await api('POST', `/api/venues/${venueId}/schedules`, { name: 'Main loop — all day', playlist_id: playlist.id });
+        await api('POST', `/api/playlists/${playlist.id}/items`, { media_id: mkloop.dataset.mkloop });
+        return render();
+      }
+    };
+
+    // Tick-boxes: on = add to that playlist, off = pull it out. Instant.
+    $('#tab-content').onchange = async (e) => {
+      const toggle = e.target.closest('[data-toggle]');
+      if (!toggle) return;
+      whereOpen.add(toggle.dataset.toggle);
+      if (toggle.checked) {
+        await api('POST', `/api/playlists/${toggle.dataset.pl}/items`, { media_id: toggle.dataset.toggle });
+      } else if (toggle.dataset.item) {
+        await api('DELETE', `/api/playlist-items/${toggle.dataset.item}`);
+      }
+      render();
     };
   }
 
