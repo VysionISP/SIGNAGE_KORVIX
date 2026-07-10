@@ -148,7 +148,7 @@
     { tab: 'overview', label: 'Overview' },
     { tab: 'screens', label: 'Screens' },
     { label: 'Media', tabs: [['content', 'Content'], ['playlists', 'Playlists'], ['schedules', 'Schedules']] },
-    { label: 'Games', tabs: [['draws', 'Draws'], ['cashking', 'CashKing']] },
+    { label: 'Games', tabs: [['draws', 'Draws'], ['cashking', 'CashKing'], ['tablet', 'Manage Tablet', 'admin']] },
     { tab: 'emergency', label: 'Emergency' },
     {
       label: 'Settings',
@@ -219,7 +219,7 @@
       overview: renderOverview, screens: renderScreens, content: renderContent,
       playlists: renderPlaylists, schedules: renderSchedules, draws: renderDraws,
       emergency: renderEmergency, integrations: renderIntegrations, reports: renderReports,
-      users: renderUsers, orgs: renderOrgs, cashking: renderCashKing,
+      users: renderUsers, orgs: renderOrgs, cashking: renderCashKing, tablet: renderTablet,
     };
     await renderers[activeTab]();
     await renderBanner();
@@ -840,19 +840,16 @@
 
   // ---- raffle number draws ----------------------------------------------------------
 
-  async function renderDraws() {
-    const { draws } = await api('GET', `/api/venues/${venueId}/draws`);
-    const remote = hasRole('admin') ? await api('GET', `/api/venues/${venueId}/remote-token`) : null;
-    const zones = venue().zones || [];
-    const remoteUrl = remote && remote.url ? location.origin + remote.url : null;
+  async function renderTablet() {
+    const remote = await api('GET', `/api/venues/${venueId}/remote-token`);
+    const remoteUrl = remote.url ? location.origin + remote.url : null;
 
-    $('#tab-draws').innerHTML = `
-      ${remote === null ? '' : `<h2>Games console (venue tablet) 🎰</h2>
+    $('#tab-tablet').innerHTML = `
+      <h2>Venue tablet — games console 🎰</h2>
       <div class="card">
-        <p class="muted" style="margin-top:0"><b>All games are run from this URL</b> — raffle draws and CashKing.
-        Set it once on the venue's tablet (or a staff phone): open it in Chrome/Safari and use
-        <b>Add to Home Screen</b> to install it as the <b>Korvix Games</b> app. No dashboard login needed.
-        Generating a new link instantly cuts off every device using the old one.</p>
+        <p class="muted" style="margin-top:0"><b>All games are run from this URL</b> — raffle draws, CashKing,
+        Wheel Spin, the members badge draw, plus venue emergency broadcast and a one-tap
+        "return screens to advertising". No dashboard login needed on the tablet.</p>
         <div class="row">
           ${remoteUrl
             ? `<input readonly id="remote-url" value="${esc(remoteUrl)}" style="flex:1;min-width:280px;font-family:monospace;font-size:12px">
@@ -860,8 +857,43 @@
                <button class="btn small secondary" id="remote-rotate">Generate new link (revoke old)</button>`
             : '<button class="btn" id="remote-rotate">Generate games console link</button>'}
         </div>
-      </div>`}
+      </div>
 
+      <h2>Setting up the tablet</h2>
+      <div class="card muted" style="line-height:1.9">
+        1. Open the link above in Chrome (Android) or Safari (iPad) on the venue tablet.<br>
+        2. Use <b>Add to Home Screen</b> — it installs as the <b>Korvix Games</b> app: full-screen, own icon.<br>
+        3. Recommended: pin the app (Android: Settings → Security → App pinning) so punters can't wander out of it.<br>
+        4. Staff phones can install the same link — every device stays in sync automatically.
+      </div>
+
+      <h2>If the tablet is lost or staff leave</h2>
+      <div class="card muted">
+        Hit <b>Generate new link</b> above — every device holding the old link is cut off instantly.
+        Then set the new link up on the replacement tablet.
+      </div>`;
+
+    const rotateBtn = $('#remote-rotate');
+    if (rotateBtn) rotateBtn.onclick = async () => {
+      if (remoteUrl && !confirm('Generate a new link? Every tablet and phone using the current link loses access.')) return;
+      await api('POST', `/api/venues/${venueId}/remote-token`);
+      render();
+    };
+    const copyBtn = $('#remote-copy');
+    if (copyBtn) {
+      copyBtn.onclick = async () => {
+        try { await navigator.clipboard.writeText($('#remote-url').value); copyBtn.textContent = 'Copied ✓'; }
+        catch { $('#remote-url').select(); document.execCommand('copy'); copyBtn.textContent = 'Copied ✓'; }
+        setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1500);
+      };
+    }
+  }
+
+  async function renderDraws() {
+    const { draws } = await api('GET', `/api/venues/${venueId}/draws`);
+    const zones = venue().zones || [];
+
+    $('#tab-draws').innerHTML = `
       <h2>Raffle number draws</h2>
       <p class="muted">Set up ticket ranges here; staff <b>run the draws from the games console</b> on the venue tablet.
       Screens take over with a spinning reel reveal. A number is never repeated within the same draw.</p>
@@ -898,21 +930,6 @@
           </tr>`).join('') || '<tr><td class="muted" colspan="6">No draws yet</td></tr>'}
         </tbody>
       </table>`;
-
-    const rotateBtn = $('#remote-rotate');
-    if (rotateBtn) rotateBtn.onclick = async () => {
-      if (remoteUrl && !confirm('Generate a new link? Every phone using the current link loses access.')) return;
-      await api('POST', `/api/venues/${venueId}/remote-token`);
-      render();
-    };
-    const copyBtn = $('#remote-copy');
-    if (copyBtn) {
-      copyBtn.onclick = async () => {
-        try { await navigator.clipboard.writeText($('#remote-url').value); copyBtn.textContent = 'Copied ✓'; }
-        catch { $('#remote-url').select(); document.execCommand('copy'); copyBtn.textContent = 'Copied ✓'; }
-        setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1500);
-      };
-    }
 
     $('#dr-add').onclick = async () => {
       const name = $('#dr-name').value.trim();
@@ -968,8 +985,8 @@
       <p class="muted">53 shuffled cards on every screen in the venue. One card revealed per game night —
       a miss rolls the jackpot up by your increment, the Joker wins it. Card faces stay on the server until
       revealed, so the board can't be cheated. <b>The game is run from the games console</b> on the venue
-      tablet (link on the Draws tab) — go live, reveal the winner's card, end the session. This page is for
-      setup and monitoring.</p>
+      tablet (link on the Manage Tablet page) — go live, reveal the winner's card, end the session. This page
+      is for setup and monitoring.</p>
 
       ${current ? `
       <div class="card">
