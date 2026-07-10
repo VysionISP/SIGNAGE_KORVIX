@@ -216,9 +216,9 @@ function buildManifest(screen) {
     })(),
     menus: db.all('SELECT * FROM menus WHERE venue_id = ?', screen.venue_id).map((m) => {
       let sections; try { sections = JSON.parse(m.sections); } catch { sections = []; }
-      return { id: m.id, name: m.name, sections };
+      return { id: m.id, name: m.name, theme: m.theme || 'classic', sections };
     }),
-    venue: { id: venue.id, name: venue.name, timezone: venue.timezone },
+    venue: { id: venue.id, name: venue.name, timezone: venue.timezone, logo: venue.logo_url || null },
     zone: zone ? { id: zone.id, name: zone.name } : null,
     emergency: emergency && {
       id: emergency.id,

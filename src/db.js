@@ -302,6 +302,14 @@ function migrate() {
     db.exec('ALTER TABLE venues ADD COLUMN latitude REAL');
     db.exec('ALTER TABLE venues ADD COLUMN longitude REAL');
   }
+  if (!venueCols.includes('logo_url')) {
+    // Venue branding, shown on menu boards and the welcome widget.
+    db.exec('ALTER TABLE venues ADD COLUMN logo_url TEXT');
+  }
+  const menuCols = db.prepare('PRAGMA table_info(menus)').all().map((c) => c.name);
+  if (!menuCols.includes('theme')) {
+    db.exec("ALTER TABLE menus ADD COLUMN theme TEXT NOT NULL DEFAULT 'classic'");
+  }
   if (!venueCols.includes('racing_jurisdiction')) {
     // Set (NSW/VIC/QLD/...) to enable the built-in TAB next-to-go poller.
     db.exec('ALTER TABLE venues ADD COLUMN racing_jurisdiction TEXT');

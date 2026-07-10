@@ -15,6 +15,8 @@ const { nudgeVenue } = require('./admin');
 const routes = [];
 function route(method, pattern, handler) { routes.push({ method, pattern, handler }); }
 
+const THEMES = new Set(['classic', 'chalkboard', 'modern', 'pub']);
+
 function cleanSections(raw) {
   if (!Array.isArray(raw)) throw new HttpError(400, 'sections must be an array');
   if (raw.length > 30) throw new HttpError(400, 'too many sections');
@@ -26,14 +28,19 @@ function cleanSections(raw) {
       price: item.price === '' || item.price === null || item.price === undefined
         ? null : (Number.isFinite(Number(item.price)) ? Number(item.price) : null),
       sold_out: !!item.sold_out,
+      photo: item.photo ? String(item.photo).slice(0, 300) : null,
     })).filter((item) => item.name),
   })).filter((section) => section.title || section.items.length);
+}
+
+function cleanTheme(theme) {
+  return THEMES.has(theme) ? theme : 'classic';
 }
 
 function menuView(menu) {
   let sections;
   try { sections = JSON.parse(menu.sections); } catch { sections = []; }
-  return { id: menu.id, name: menu.name, sections, updated_at: menu.updated_at };
+  return { id: menu.id, name: menu.name, theme: menu.theme || 'classic', sections, updated_at: menu.updated_at };
 }
 
 route('GET', '/api/venues/:venueId/menus', (req, res, params) => {
@@ -48,8 +55,8 @@ route('POST', '/api/venues/:venueId/menus', async (req, res, params) => {
   required(body, 'name');
   const sections = cleanSections(body.sections || [{ title: 'Mains', items: [] }]);
   const menuId = db.id();
-  db.run('INSERT INTO menus (id, venue_id, name, sections, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    menuId, params.venueId, String(body.name).slice(0, 60), JSON.stringify(sections), db.now(), db.now());
+  db.run('INSERT INTO menus (id, venue_id, name, theme, sections, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    menuId, params.venueId, String(body.name).slice(0, 60), cleanTheme(body.theme), JSON.stringify(sections), db.now(), db.now());
   // The board is instantly usable: it shows up in the Content gallery.
   db.run(
     'INSERT INTO media (id, venue_id, name, type, src, content, duration_seconds, fit, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -64,8 +71,10 @@ route('PATCH', '/api/menus/:id', async (req, res, params) => {
   auth.assertVenue(req.user, menu.venue_id, 'editor');
   const body = await readJson(req);
   const sections = body.sections !== undefined ? JSON.stringify(cleanSections(body.sections)) : menu.sections;
-  db.run('UPDATE menus SET name = ?, sections = ?, updated_at = ? WHERE id = ?',
-    body.name !== undefined ? String(body.name).slice(0, 60) : menu.name, sections, db.now(), menu.id);
+  db.run('UPDATE menus SET name = ?, theme = ?, sections = ?, updated_at = ? WHERE id = ?',
+    body.name !== undefined ? String(body.name).slice(0, 60) : menu.name,
+    body.theme !== undefined ? cleanTheme(body.theme) : (menu.theme || 'classic'),
+    sections, db.now(), menu.id);
   nudgeVenue(menu.venue_id);
   sendJson(res, 200, menuView(db.get('SELECT * FROM menus WHERE id = ?', menu.id)));
 });

@@ -92,8 +92,9 @@ route('PATCH', '/api/venues/:id', async (req, res, params) => {
     if (!db.get('SELECT id FROM orgs WHERE id = ?', body.org_id ?? '')) throw new HttpError(400, 'unknown business');
     orgId = body.org_id;
   }
-  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, latitude = ?, longitude = ?, racing_jurisdiction = ?, org_id = ? WHERE id = ?',
+  db.run('UPDATE venues SET name = ?, timezone = ?, address = ?, logo_url = ?, latitude = ?, longitude = ?, racing_jurisdiction = ?, org_id = ? WHERE id = ?',
     body.name ?? venue.name, body.timezone ?? venue.timezone, body.address ?? venue.address,
+    body.logo_url !== undefined ? (body.logo_url ? String(body.logo_url).slice(0, 300) : null) : venue.logo_url,
     body.latitude !== undefined ? numOrNull(body.latitude) : venue.latitude,
     body.longitude !== undefined ? numOrNull(body.longitude) : venue.longitude,
     body.racing_jurisdiction !== undefined

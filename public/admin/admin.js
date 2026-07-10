@@ -717,6 +717,7 @@
   function menuFromDom(card) {
     return {
       name: card.querySelector('[data-mn-name]').value.trim() || 'Menu',
+      theme: card.querySelector('[data-mn-theme]').value,
       sections: [...card.querySelectorAll('[data-mn-section]')].map((sec) => ({
         title: sec.querySelector('[data-mn-title]').value.trim(),
         items: [...sec.querySelectorAll('[data-mn-item]')].map((row) => ({
@@ -724,13 +725,21 @@
           desc: row.querySelector('[data-mn-idesc]').value.trim(),
           price: row.querySelector('[data-mn-iprice]').value.trim(),
           sold_out: row.querySelector('[data-mn-isold]').checked,
+          photo: row.querySelector('[data-mn-iphoto]').value || null,
         })).filter((i) => i.name),
       })),
     };
   }
 
+  const photoCellHtml = (photo) => photo
+    ? `<img src="${esc(photo)}" style="width:30px;height:30px;object-fit:cover;border-radius:5px;vertical-align:middle">
+       <a href="#" data-mn-clearphoto title="Remove photo" style="color:var(--bad);font-size:11px">✕</a>`
+    : '<button class="btn small secondary" data-mn-photobtn title="Add a photo of this dish">📷</button>';
+
   const itemRowHtml = (item = {}) => `
     <div class="row" data-mn-item style="margin-top:6px;flex-wrap:nowrap">
+      <span data-mn-photocell style="white-space:nowrap">${photoCellHtml(item.photo)}</span>
+      <input type="hidden" data-mn-iphoto value="${esc(item.photo || '')}">
       <input data-mn-iname placeholder="Item — e.g. Chicken Schnitzel" value="${esc(item.name || '')}" style="flex:2;min-width:140px">
       <input data-mn-idesc placeholder="Description (optional)" value="${esc(item.desc || '')}" style="flex:3;min-width:120px">
       <input data-mn-iprice type="number" step="0.5" placeholder="$" value="${item.price ?? ''}" style="width:84px">
@@ -738,6 +747,11 @@
         <input type="checkbox" data-mn-isold ${item.sold_out ? 'checked' : ''}>sold out</label>
       <button class="btn small danger" data-mn-delitem>✕</button>
     </div>`;
+
+  const MENU_THEME_OPTIONS = [
+    ['classic', 'Classic — dark & gold'], ['chalkboard', 'Chalkboard'],
+    ['modern', 'Modern — light'], ['pub', 'Old Pub — deep red'],
+  ];
 
   const sectionHtml = (section = { title: '', items: [{}] }) => `
     <div data-mn-section style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px">
@@ -765,6 +779,9 @@
         <div class="card" data-mn-card="${menu.id}">
           <div class="row">
             <input data-mn-name value="${esc(menu.name)}" style="font-weight:800;font-size:16px;max-width:280px">
+            <select data-mn-theme title="Board design">
+              ${MENU_THEME_OPTIONS.map(([v, label]) => `<option value="${v}" ${(menu.theme || 'classic') === v ? 'selected' : ''}>${label}</option>`).join('')}
+            </select>
             <span class="muted">updated ${new Date(menu.updated_at).toLocaleString()}</span>
             <div class="spacer"></div>
             <button class="btn" data-mn-save>Save to screens</button>
@@ -772,7 +789,8 @@
             <button class="btn small danger" data-mn-delete>Delete menu</button>
           </div>
           <div data-mn-sections>${menu.sections.map(sectionHtml).join('')}</div>
-        </div>`).join('') || ''}`;
+        </div>`).join('') || ''}
+      <input type="file" id="mn-photo-file" accept="image/*" style="display:none">`;
 
     $('#mn-create').onclick = async () => {
       const name = $('#mn-new-name').value.trim();
@@ -781,7 +799,35 @@
       render();
     };
 
+    // Item photo upload: one shared hidden file input, aimed at the row
+    // whose 📷 button was last clicked.
+    let photoTargetRow = null;
+    $('#mn-photo-file').onchange = async () => {
+      const file = $('#mn-photo-file').files[0];
+      if (!file || !photoTargetRow) return;
+      const up = await uploadFile(file);
+      const uploaded = await up.json();
+      if (!up.ok) return alert('Photo upload failed: ' + (uploaded.error || up.status));
+      photoTargetRow.querySelector('[data-mn-iphoto]').value = uploaded.url;
+      photoTargetRow.querySelector('[data-mn-photocell]').innerHTML = photoCellHtml(uploaded.url);
+      $('#mn-photo-file').value = '';
+    };
+
     $('#tab-menus').onclick = async (e) => {
+      const photoBtn = e.target.closest('[data-mn-photobtn]');
+      if (photoBtn) {
+        photoTargetRow = photoBtn.closest('[data-mn-item]');
+        $('#mn-photo-file').click();
+        return;
+      }
+      const clearPhoto = e.target.closest('[data-mn-clearphoto]');
+      if (clearPhoto) {
+        e.preventDefault();
+        const row = clearPhoto.closest('[data-mn-item]');
+        row.querySelector('[data-mn-iphoto]').value = '';
+        row.querySelector('[data-mn-photocell]').innerHTML = photoCellHtml(null);
+        return;
+      }
       const card = e.target.closest('[data-mn-card]');
       if (!card) return;
       const menuId = card.dataset.mnCard;
@@ -805,11 +851,11 @@
       }
     };
 
-    // Sold-out ticks save immediately — the mid-service use case.
+    // Sold-out ticks and theme changes save immediately.
     $('#tab-menus').onchange = async (e) => {
-      if (!e.target.matches('[data-mn-isold]')) return;
+      if (!e.target.matches('[data-mn-isold]') && !e.target.matches('[data-mn-theme]')) return;
       const card = e.target.closest('[data-mn-card]');
-      await api('PATCH', `/api/menus/${card.dataset.mnCard}`, menuFromDom(card));
+      if (card) await api('PATCH', `/api/menus/${card.dataset.mnCard}`, menuFromDom(card));
     };
   }
 
@@ -1455,6 +1501,19 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
         Weather location and the racing feed live under Settings → Integrations.</p>
       </div>
 
+      <h2>Venue logo</h2>
+      <div class="card">
+        <div class="row">
+          ${v.logo_url
+            ? `<img src="${esc(v.logo_url)}" style="max-height:60px;max-width:220px;object-fit:contain;background:#fff2;border-radius:8px;padding:6px">`
+            : '<span class="muted">No logo yet.</span>'}
+          <input type="file" id="vs-logo" accept="image/*" style="max-width:240px">
+          ${v.logo_url ? '<button class="btn small danger" id="vs-logo-remove">Remove logo</button>' : ''}
+        </div>
+        <p class="muted" style="margin-bottom:0">Shown on every menu board and the welcome screen.
+        A PNG with a transparent background looks best.</p>
+      </div>
+
       <h2 style="color:var(--bad)">Danger zone</h2>
       <div class="card">
         <div class="row">
@@ -1473,6 +1532,21 @@ curl -X POST ${base}/api/integrations/${venueId}/membership \\
       await refresh();
       alert('Saved.');
     };
+    $('#vs-logo').onchange = async () => {
+      const file = $('#vs-logo').files[0];
+      if (!file) return;
+      const up = await uploadFile(file);
+      const uploaded = await up.json();
+      if (!up.ok) return alert('Logo upload failed: ' + (uploaded.error || up.status));
+      await api('PATCH', `/api/venues/${venueId}`, { logo_url: uploaded.url });
+      await refresh();
+    };
+    const logoRemove = $('#vs-logo-remove');
+    if (logoRemove) logoRemove.onclick = async () => {
+      await api('PATCH', `/api/venues/${venueId}`, { logo_url: null });
+      await refresh();
+    };
+
     $('#vs-delete').onclick = async () => {
       const typed = prompt(`This permanently deletes "${v.name}" and everything in it.\nType the venue name to confirm:`);
       if (typed !== v.name) { if (typed !== null) alert('Name did not match — nothing deleted.'); return; }

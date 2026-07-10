@@ -516,6 +516,22 @@ test('full venue lifecycle', async (t) => {
     served = manifest.data.menus.find((m) => m.id === menuId);
     assert.strictEqual(served.sections[0].items[1].sold_out, true);
 
+    // Theme + item photos + venue logo flow through to the player
+    const themed = await api('PATCH', `/api/menus/${menuId}`, {
+      theme: 'chalkboard',
+      sections: [{ title: 'Mains', items: [{ name: 'Schnitzel', price: 24.5, photo: '/uploads/schnitty.png' }] }],
+    });
+    assert.strictEqual(themed.data.theme, 'chalkboard');
+    const badTheme = await api('PATCH', `/api/menus/${menuId}`, { theme: 'neon-vaporwave' });
+    assert.strictEqual(badTheme.data.theme, 'classic'); // unknown themes fall back
+
+    await api('PATCH', `/api/venues/${venueId}`, { logo_url: '/uploads/logo.png' });
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.venue.logo, '/uploads/logo.png');
+    served = manifest.data.menus.find((m) => m.id === menuId);
+    assert.strictEqual(served.sections[0].items[0].photo, '/uploads/schnitty.png');
+    await api('PATCH', `/api/venues/${venueId}`, { logo_url: null });
+
     // Deleting the menu takes its board media with it
     await api('DELETE', `/api/menus/${menuId}`);
     const after = await api('GET', `/api/venues/${venueId}/media`);

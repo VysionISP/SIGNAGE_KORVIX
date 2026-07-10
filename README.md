@@ -113,10 +113,13 @@ npm test           # end-to-end smoke tests (boots a real server)
   present" — a number is never repeated within a draw. Clearing returns
   screens to scheduled content.
 - **Menu board designer.** Venues design menus in the dashboard (sections →
-  items with descriptions, prices and a sold-out toggle); each menu renders
-  as a polished board widget that lands in the Content gallery automatically.
-  Saves — including sold-out ticks mid-service — hit the screens within a
-  second. `GET/POST /api/venues/:id/menus`, `PATCH/DELETE /api/menus/:id`.
+  items with descriptions, prices, dish photos and a sold-out toggle); each
+  menu renders as a polished board widget that lands in the Content gallery
+  automatically. Four board designs — Classic (dark & gold), Chalkboard,
+  Modern (light) and Old Pub — and the venue logo (uploaded once under
+  Settings → Venue) crowns every board and the welcome screen. Saves —
+  including sold-out ticks mid-service — hit the screens within a second.
+  `GET/POST /api/venues/:id/menus`, `PATCH/DELETE /api/menus/:id`.
 - **Split-screen layouts.** Per screen: full, main + side panel (promo
   rotation in the right third, scaled-to-fit), main + scrolling bottom
   ticker, or all three. Side panel plays any playlist; ticker messages are

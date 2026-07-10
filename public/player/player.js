@@ -349,31 +349,61 @@
       '#052e16,#14532d');
   }
 
-  // Designed menu board: sections flow in columns, dotted leaders to prices,
-  // sold-out items greyed with a badge. Data lives in manifest.menus.
+  // Designed menu board: themed, with optional item photos and the venue
+  // logo up top. Data lives in manifest.menus / manifest.venue.logo.
+  const MENU_THEMES = {
+    classic: {
+      bg: 'linear-gradient(160deg,#1c1410,#0d0906)', font: 'system-ui,sans-serif',
+      name: '#fff', section: '#fbbf24', rule: '#fbbf2488', text: '#fff',
+      muted: 'rgba(255,255,255,.75)', leader: 'rgba(255,255,255,.35)', sold: '#f87171',
+    },
+    chalkboard: {
+      bg: 'radial-gradient(ellipse at top,#233329,#0f1a13)', font: "'Segoe Print','Comic Sans MS',cursive",
+      name: '#f8fafc', section: '#a7f3d0', rule: '#a7f3d066', text: '#f1f5f9',
+      muted: 'rgba(241,245,249,.7)', leader: 'rgba(241,245,249,.3)', sold: '#fca5a5',
+    },
+    modern: {
+      bg: 'linear-gradient(160deg,#faf7f2,#ece5d8)', font: 'system-ui,sans-serif',
+      name: '#1c1917', section: '#c2410c', rule: '#c2410c66', text: '#292524',
+      muted: 'rgba(41,37,36,.65)', leader: 'rgba(41,37,36,.3)', sold: '#dc2626',
+    },
+    pub: {
+      bg: 'linear-gradient(160deg,#3b1212,#190707)', font: "Georgia,'Times New Roman',serif",
+      name: '#fde68a', section: '#fde68a', rule: '#fde68a66', text: '#fef3c7',
+      muted: 'rgba(254,243,199,.7)', leader: 'rgba(254,243,199,.3)', sold: '#fca5a5',
+    },
+  };
+
   function menuBoardWidget(menuId) {
     const menu = ((manifest && manifest.menus) || []).find((m) => m.id === menuId);
     if (!menu) {
       return widgetShell('MENU', '<h1>Menu board</h1><div style="opacity:.7;font-size:2.4vw">This menu was deleted — remove it from the playlist.</div>', '#1c1917,#3f3f46');
     }
+    const T = MENU_THEMES[menu.theme] || MENU_THEMES.classic;
     const price = (p) => p == null ? '' : '$' + Number(p).toFixed(2).replace(/\.00$/, '');
+    const logo = manifest.venue.logo
+      ? `<img src="${esc(manifest.venue.logo)}" style="max-height:9vh;max-width:26vw;object-fit:contain;margin-bottom:1vh">` : '';
     const sectionsHtml = menu.sections.map((section) => `
       <div style="break-inside:avoid;margin-bottom:2.6vh;text-align:left">
-        <div style="font-size:2.4vw;font-weight:800;letter-spacing:.14em;color:#fbbf24;border-bottom:.15vh solid #fbbf2455;padding-bottom:.6vh;margin-bottom:1.2vh;text-transform:uppercase">${esc(section.title)}</div>
+        <div style="font-size:2.4vw;font-weight:800;letter-spacing:.14em;color:${T.section};border-bottom:.15vh solid ${T.rule};padding-bottom:.6vh;margin-bottom:1.2vh;text-transform:uppercase">${esc(section.title)}</div>
         ${section.items.map((item) => `
-          <div style="margin-bottom:1.1vh;${item.sold_out ? 'opacity:.45' : ''}">
-            <div style="display:flex;align-items:baseline;gap:.8vw">
-              <span style="font-size:1.9vw;font-weight:700;${item.sold_out ? 'text-decoration:line-through' : ''}">${esc(item.name)}</span>
-              ${item.sold_out ? '<span style="font-size:1.1vw;font-weight:800;color:#f87171;border:.1vw solid #f87171;border-radius:.4vw;padding:0 .5vw">SOLD OUT</span>' : ''}
-              <span style="flex:1;border-bottom:.2vh dotted rgba(255,255,255,.35);transform:translateY(-.5vh)"></span>
-              <span style="font-size:1.9vw;font-weight:700;font-variant-numeric:tabular-nums">${price(item.price)}</span>
+          <div style="margin-bottom:1.2vh;${item.sold_out ? 'opacity:.45' : ''};display:flex;gap:.9vw;align-items:flex-start">
+            ${item.photo ? `<img src="${esc(item.photo)}" style="width:6.5vh;height:6.5vh;object-fit:cover;border-radius:.8vh;flex-shrink:0;box-shadow:0 .3vh .8vh rgba(0,0,0,.35)">` : ''}
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:baseline;gap:.8vw">
+                <span style="font-size:1.9vw;font-weight:700;${item.sold_out ? 'text-decoration:line-through' : ''}">${esc(item.name)}</span>
+                ${item.sold_out ? `<span style="font-size:1.1vw;font-weight:800;color:${T.sold};border:.1vw solid ${T.sold};border-radius:.4vw;padding:0 .5vw">SOLD OUT</span>` : ''}
+                <span style="flex:1;border-bottom:.2vh dotted ${T.leader};transform:translateY(-.5vh)"></span>
+                <span style="font-size:1.9vw;font-weight:700;font-variant-numeric:tabular-nums">${price(item.price)}</span>
+              </div>
+              ${item.desc ? `<div style="font-size:1.35vw;color:${T.muted};margin-top:.2vh">${esc(item.desc)}</div>` : ''}
             </div>
-            ${item.desc ? `<div style="font-size:1.35vw;opacity:.75;margin-top:.2vh">${esc(item.desc)}</div>` : ''}
           </div>`).join('')}
       </div>`).join('');
     const cols = menu.sections.length >= 3 ? 3 : menu.sections.length === 2 ? 2 : 1;
-    return `<div class="widget" style="background:linear-gradient(160deg,#1c1410,#0d0906);justify-content:flex-start;padding:3vh 4vw">
-      <div style="font-size:3.6vw;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-bottom:2.4vh;border-bottom:.3vh double #fbbf2488;padding-bottom:1vh;width:100%;text-align:center">${esc(menu.name)}</div>
+    return `<div class="widget" style="background:${T.bg};color:${T.text};font-family:${T.font};justify-content:flex-start;padding:3vh 4vw">
+      ${logo}
+      <div style="font-size:3.6vw;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-bottom:2.4vh;border-bottom:.3vh double ${T.rule};padding-bottom:1vh;width:100%;text-align:center;color:${T.name}">${esc(menu.name)}</div>
       <div style="columns:${cols};column-gap:3.5vw;width:100%;flex:1;overflow:hidden">${sectionsHtml}</div>
     </div>`;
   }
@@ -476,8 +506,10 @@
         const timeString = new Date().toLocaleTimeString('en-AU', {
           hour: 'numeric', minute: '2-digit', timeZone: manifest.venue.timezone,
         });
+        const welcomeLogo = manifest.venue.logo
+          ? `<img src="${esc(manifest.venue.logo)}" style="max-height:14vh;max-width:34vw;object-fit:contain;margin-bottom:2vh">` : '';
         return widgetShell('WELCOME TO',
-          `<h1>${esc(manifest.venue.name)}</h1><div class="big" style="font-size:6vw">${timeString}</div>` +
+          `${welcomeLogo}<h1>${esc(manifest.venue.name)}</h1><div class="big" style="font-size:6vw">${timeString}</div>` +
           '<div style="font-size:2.2vw;opacity:.8;margin-top:2vh">Open 7 days · 7am til late</div>',
           '#111827,#334155');
       }
