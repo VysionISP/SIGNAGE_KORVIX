@@ -266,6 +266,12 @@ function migrate() {
     // 1 while an offline alert is outstanding, so we alert once per outage.
     db.exec('ALTER TABLE screens ADD COLUMN alerted INTEGER NOT NULL DEFAULT 0');
   }
+  const scheduleCols = db.prepare('PRAGMA table_info(schedules)').all().map((c) => c.name);
+  if (!scheduleCols.includes('start_date')) {
+    // Optional calendar bounds (venue-local YYYY-MM-DD). NULL = every week.
+    db.exec('ALTER TABLE schedules ADD COLUMN start_date TEXT');
+    db.exec('ALTER TABLE schedules ADD COLUMN end_date TEXT');
+  }
   const mediaCols = db.prepare('PRAGMA table_info(media)').all().map((c) => c.name);
   if (!mediaCols.includes('fit')) {
     db.exec("ALTER TABLE media ADD COLUMN fit TEXT NOT NULL DEFAULT 'cover'");

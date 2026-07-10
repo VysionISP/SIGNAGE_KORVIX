@@ -399,6 +399,12 @@ route('GET', '/api/venues/:venueId/schedules', (req, res, params) => {
   });
 });
 
+function cleanDate(value, label) {
+  if (value === undefined || value === null || value === '') return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) throw new HttpError(400, `${label} must be YYYY-MM-DD`);
+  return String(value);
+}
+
 route('POST', '/api/venues/:venueId/schedules', async (req, res, params) => {
   auth.assertVenue(req.user, params.venueId, 'editor');
   const body = await readJson(req);
@@ -406,12 +412,16 @@ route('POST', '/api/venues/:venueId/schedules', async (req, res, params) => {
   mustFind(db.get('SELECT id FROM playlists WHERE id = ?', body.playlist_id), 'playlist');
   const days = Array.isArray(body.days_of_week) && body.days_of_week.length
     ? body.days_of_week : [0, 1, 2, 3, 4, 5, 6];
+  const startDate = cleanDate(body.start_date, 'start_date');
+  const endDate = cleanDate(body.end_date, 'end_date');
+  if (startDate && endDate && endDate < startDate) throw new HttpError(400, 'end_date is before start_date');
   const scheduleId = db.id();
   db.run(
-    `INSERT INTO schedules (id, venue_id, zone_id, screen_id, playlist_id, name, days_of_week, start_time, end_time, priority, active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    `INSERT INTO schedules (id, venue_id, zone_id, screen_id, playlist_id, name, days_of_week, start_time, end_time, start_date, end_date, priority, active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     scheduleId, params.venueId, body.zone_id || null, body.screen_id || null, body.playlist_id,
     body.name || '', JSON.stringify(days), body.start_time || '00:00', body.end_time || '24:00',
+    startDate, endDate,
     parseInt(body.priority, 10) || 0);
   nudgeVenue(params.venueId);
   sendJson(res, 201, db.get('SELECT * FROM schedules WHERE id = ?', scheduleId));
@@ -423,7 +433,7 @@ route('PATCH', '/api/schedules/:id', async (req, res, params) => {
   const body = await readJson(req);
   db.run(
     `UPDATE schedules SET name = ?, zone_id = ?, screen_id = ?, playlist_id = ?, days_of_week = ?,
-       start_time = ?, end_time = ?, priority = ?, active = ? WHERE id = ?`,
+       start_time = ?, end_time = ?, start_date = ?, end_date = ?, priority = ?, active = ? WHERE id = ?`,
     body.name ?? schedule.name,
     body.zone_id !== undefined ? (body.zone_id || null) : schedule.zone_id,
     body.screen_id !== undefined ? (body.screen_id || null) : schedule.screen_id,
@@ -431,6 +441,8 @@ route('PATCH', '/api/schedules/:id', async (req, res, params) => {
     Array.isArray(body.days_of_week) ? JSON.stringify(body.days_of_week) : schedule.days_of_week,
     body.start_time ?? schedule.start_time,
     body.end_time ?? schedule.end_time,
+    body.start_date !== undefined ? cleanDate(body.start_date, 'start_date') : schedule.start_date,
+    body.end_date !== undefined ? cleanDate(body.end_date, 'end_date') : schedule.end_date,
     body.priority !== undefined ? parseInt(body.priority, 10) || 0 : schedule.priority,
     body.active !== undefined ? (body.active ? 1 : 0) : schedule.active,
     schedule.id);

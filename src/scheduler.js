@@ -11,26 +11,27 @@ const db = require('./db');
 const cashking = require('./cardgame');
 const games = require('./games');
 
-// Venue-local weekday (0=Sun..6=Sat) and minutes since midnight.
+// Venue-local weekday (0=Sun..6=Sat), minutes since midnight, and the local
+// calendar date (plus yesterday's, for windows that wrap past midnight).
 function venueClock(timezone, date = new Date()) {
+  const opts = {
+    weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  };
   let parts;
   try {
-    parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      weekday: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).formatToParts(date);
+    parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, ...opts }).formatToParts(date);
   } catch {
-    parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'UTC', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
-    }).formatToParts(date);
+    parts = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', ...opts }).formatToParts(date);
   }
   const get = (t) => parts.find((p) => p.type === t)?.value;
   const dayIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(get('weekday'));
   const minutes = (parseInt(get('hour'), 10) % 24) * 60 + parseInt(get('minute'), 10);
-  return { day: dayIndex, minutes };
+  const localDate = `${get('year')}-${get('month')}-${get('day')}`;
+  const prevMs = Date.UTC(+get('year'), +get('month') - 1, +get('day')) - 86400000;
+  const prev = new Date(prevMs);
+  const prevDate = `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}-${String(prev.getUTCDate()).padStart(2, '0')}`;
+  return { day: dayIndex, minutes, date: localDate, prevDate };
 }
 
 function toMinutes(hhmm) {
@@ -67,6 +68,28 @@ function specificity(schedule) {
   return 0;
 }
 
+// Calendar bounds + weekly pattern + time window, wrap-aware: the small hours
+// of a midnight-wrapping window belong to YESTERDAY's date and weekday.
+function matchesSchedule(schedule, clock) {
+  let days;
+  try { days = JSON.parse(schedule.days_of_week); } catch { days = [0, 1, 2, 3, 4, 5, 6]; }
+  if (!Array.isArray(days) || !days.length) days = [0, 1, 2, 3, 4, 5, 6];
+  const inDates = (d) => (!schedule.start_date || d >= schedule.start_date)
+    && (!schedule.end_date || d <= schedule.end_date);
+
+  const start = toMinutes(schedule.start_time);
+  const end = toMinutes(schedule.end_time);
+  const wraps = end < start;
+  if (!wraps) { // plain window (end===start counts as all-day via inWindow)
+    return days.includes(clock.day)
+      && inWindow(clock.minutes, schedule.start_time, schedule.end_time)
+      && inDates(clock.date);
+  }
+  if (clock.minutes >= start) return days.includes(clock.day) && inDates(clock.date);
+  if (clock.minutes < end) return days.includes((clock.day + 6) % 7) && inDates(clock.prevDate);
+  return false;
+}
+
 function activeEmergency(venueId) {
   return db.get(
     `SELECT * FROM emergencies
@@ -90,7 +113,7 @@ function activeDraw(screen) {
 function resolveSchedule(screen, date = new Date()) {
   const venue = db.get('SELECT * FROM venues WHERE id = ?', screen.venue_id);
   if (!venue) return null;
-  const { day, minutes } = venueClock(venue.timezone, date);
+  const clock = venueClock(venue.timezone, date);
 
   const candidates = db.all(
     `SELECT * FROM schedules
@@ -98,11 +121,13 @@ function resolveSchedule(screen, date = new Date()) {
        AND (screen_id IS NULL OR screen_id = ?)
        AND (zone_id IS NULL OR zone_id = ?)`,
     screen.venue_id, screen.id, screen.zone_id ?? '',
-  ).filter((s) => matchDay(s.days_of_week, day, minutes, s.start_time, s.end_time));
+  ).filter((s) => matchesSchedule(s, clock));
 
   if (!candidates.length) return null;
+  const dated = (s) => (s.start_date || s.end_date) ? 1 : 0;
   candidates.sort((a, b) =>
     specificity(b) - specificity(a)
+    || dated(b) - dated(a) // a calendar event outranks the everyday loop
     || b.priority - a.priority
     || toMinutes(b.start_time) - toMinutes(a.start_time));
   return candidates[0];
@@ -216,4 +241,4 @@ function buildManifest(screen) {
   };
 }
 
-module.exports = { venueClock, inWindow, matchDay, resolveSchedule, buildManifest, activeEmergency, activeDraw, playlistItems };
+module.exports = { venueClock, inWindow, matchDay, matchesSchedule, resolveSchedule, buildManifest, activeEmergency, activeDraw, playlistItems };

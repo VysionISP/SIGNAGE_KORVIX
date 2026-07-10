@@ -439,6 +439,42 @@ test('full venue lifecycle', async (t) => {
     assert.ok(manifest.data.playlist.items[0].media_id);
   });
 
+  await t.test('calendar-dated schedules beat weekly ones and expire', async () => {
+    const sydney = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(d);
+    const today = sydney(new Date());
+    const yesterday = sydney(new Date(Date.now() - 86400000));
+
+    const eventPl = await api('POST', `/api/venues/${venueId}/playlists`, { name: 'Xmas Special' });
+    await api('POST', `/api/playlists/${eventPl.data.id}/items`, { media_id: mediaId });
+
+    // Same specificity as the existing screen-targeted weekly schedule, but
+    // dated for today -> the calendar event wins without touching priority.
+    const event = await api('POST', `/api/venues/${venueId}/schedules`, {
+      name: 'Event day', playlist_id: eventPl.data.id, screen_id: screenId,
+      start_date: today, end_date: today,
+    });
+    assert.strictEqual(event.status, 201);
+    let manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.strictEqual(manifest.data.playlist.name, 'Xmas Special');
+
+    // Move the window to yesterday -> expired, weekly schedule resumes
+    await api('PATCH', `/api/schedules/${event.data.id}`, { start_date: yesterday, end_date: yesterday });
+    manifest = await api('GET', `/api/player/${deviceKey}/manifest`);
+    assert.notStrictEqual(manifest.data.playlist.name, 'Xmas Special');
+
+    const badDate = await api('POST', `/api/venues/${venueId}/schedules`, {
+      playlist_id: eventPl.data.id, start_date: '25/12/2026',
+    });
+    assert.strictEqual(badDate.status, 400);
+    const backwards = await api('POST', `/api/venues/${venueId}/schedules`, {
+      playlist_id: eventPl.data.id, start_date: '2026-12-26', end_date: '2026-12-20',
+    });
+    assert.strictEqual(backwards.status, 400);
+
+    await api('DELETE', `/api/schedules/${event.data.id}`);
+    await api('DELETE', `/api/playlists/${eventPl.data.id}`);
+  });
+
   await t.test('venue racing jurisdiction persists', async () => {
     const patched = await api('PATCH', `/api/venues/${venueId}`, { racing_jurisdiction: 'nsw' });
     assert.strictEqual(patched.data.racing_jurisdiction, 'NSW');
@@ -859,4 +895,19 @@ test('scheduler time-window helpers', () => {
   assert.strictEqual(matchDay('[5]', 6, 60, '21:00', '02:00'), true);
   assert.strictEqual(matchDay('[5]', 6, 3 * 60, '21:00', '02:00'), false);
   assert.strictEqual(matchDay('[5]', 5, 22 * 60, '21:00', '02:00'), true);
+
+  // Calendar bounds, wrap-aware: the small hours belong to yesterday's date.
+  const { matchesSchedule } = require('../src/scheduler');
+  const fridayNight = {
+    days_of_week: '[5]', start_time: '21:00', end_time: '02:00',
+    start_date: '2026-07-10', end_date: '2026-07-10', // a Friday
+  };
+  const fri11pm = { day: 5, minutes: 23 * 60, date: '2026-07-10', prevDate: '2026-07-09' };
+  const sat1am = { day: 6, minutes: 60, date: '2026-07-11', prevDate: '2026-07-10' };
+  const nextSat1am = { day: 6, minutes: 60, date: '2026-07-18', prevDate: '2026-07-17' };
+  assert.strictEqual(matchesSchedule(fridayNight, fri11pm), true);
+  assert.strictEqual(matchesSchedule(fridayNight, sat1am), true);   // spillover past midnight
+  assert.strictEqual(matchesSchedule(fridayNight, nextSat1am), false); // wrong week
+  const openEnded = { ...fridayNight, start_date: null, end_date: null };
+  assert.strictEqual(matchesSchedule(openEnded, nextSat1am), true); // weekly, no dates
 });

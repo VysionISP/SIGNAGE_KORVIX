@@ -769,26 +769,32 @@
     const zones = venue().zones || [];
 
     $('#tab-schedules').innerHTML = `
-      <h2>Schedules (dayparting)</h2>
-      <p class="muted">Most specific target wins: screen &gt; zone &gt; whole venue, then priority. End before start runs past midnight.</p>
+      <h2>Schedules (dayparting &amp; calendar)</h2>
+      <p class="muted">Most specific target wins: screen &gt; zone &gt; whole venue; a schedule with calendar dates beats
+      the everyday loop; then priority. End before start runs past midnight. Leave the dates blank for every-week schedules —
+      set them for one-offs and seasonal campaigns (e.g. Christmas menu 20–26 Dec).</p>
       <table>
-        <thead><tr><th>Name</th><th>Target</th><th>Playlist</th><th>Days</th><th>Time</th><th>Priority</th><th>Active</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Target</th><th>Playlist</th><th>Days</th><th>Time</th><th>Dates</th><th>Priority</th><th>Active</th><th></th></tr></thead>
         <tbody>${schedules.map((s) => {
           let days = [];
           try { days = JSON.parse(s.days_of_week); } catch { /* ignore */ }
           const dayLabel = days.length === 7 ? 'Every day' : days.map((d) => DAY_NAMES[d]).join(' ');
           const target = s.screen_name ? `Screen: ${esc(s.screen_name)}` : s.zone_name ? `Zone: ${esc(s.zone_name)}` : 'Whole venue';
+          const fmtDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' }) : null;
+          const dates = !s.start_date && !s.end_date ? '<span class="muted">every week</span>'
+            : `📅 ${fmtDate(s.start_date) || '…'}${(s.start_date === s.end_date && s.start_date) ? '' : ` – ${fmtDate(s.end_date) || 'ongoing'}`}`;
           return `<tr style="${s.active ? '' : 'opacity:.45'}">
             <td>${esc(s.name) || '<span class="muted">—</span>'}</td>
             <td class="muted">${target}</td>
             <td>${esc(s.playlist_name)}</td>
             <td class="muted">${dayLabel}</td>
             <td>${esc(s.start_time)}–${esc(s.end_time)}</td>
+            <td>${dates}</td>
             <td class="muted">${s.priority}</td>
             <td><button class="btn small secondary" data-act="toggle" data-id="${s.id}" data-active="${s.active}">${s.active ? 'On' : 'Off'}</button></td>
             <td style="text-align:right"><button class="btn small danger" data-act="del" data-id="${s.id}">✕</button></td>
           </tr>`;
-        }).join('') || '<tr><td class="muted" colspan="8">No schedules yet</td></tr>'}
+        }).join('') || '<tr><td class="muted" colspan="9">No schedules yet</td></tr>'}
         </tbody>
       </table>
 
@@ -805,6 +811,8 @@
         <div class="form-grid">
           <label>Start<input id="sc-start" type="time" value="07:00"></label>
           <label>End<input id="sc-end" type="time" value="23:00"></label>
+          <label>From date (optional)<input id="sc-from" type="date"></label>
+          <label>To date (optional)<input id="sc-to" type="date"></label>
           <label>Priority<input id="sc-priority" type="number" value="0"></label>
           <label>Days<div class="row" id="sc-days" style="gap:6px">
             ${DAY_NAMES.map((d, i) => `<label style="flex-direction:row;gap:3px;align-items:center"><input type="checkbox" value="${i}" checked>${d}</label>`).join('')}
@@ -822,6 +830,8 @@
         screen_id: $('#sc-screen').value || null,
         start_time: $('#sc-start').value || '00:00',
         end_time: $('#sc-end').value || '24:00',
+        start_date: $('#sc-from').value || null,
+        end_date: $('#sc-to').value || null,
         priority: parseInt($('#sc-priority').value, 10) || 0,
         days_of_week: days,
       });
