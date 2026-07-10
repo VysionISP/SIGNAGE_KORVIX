@@ -55,6 +55,12 @@
   .chip.on { background: var(--accent); color: #04202e; border-color: var(--accent); font-weight: 700; }
   .venue-row td { color: var(--muted); font-size: 13px; }
   #overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  tr.click { cursor: pointer; }
+  tr.click:hover td { background: rgba(56,189,248,.06); }
+  .crumb { color: var(--muted); text-decoration: none; }
+  .crumb:hover { color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -66,40 +72,7 @@
   <span class="muted" id="who"></span>
   <a href="/admin/" style="text-decoration:none">← Signage dashboard</a>
 </header>
-<main>
-  <div class="kpis" id="kpis"></div>
-
-  <h2>Licence pricing</h2>
-  <div class="card">
-    <div class="row">
-      <label class="muted">Main screen (games + channels) $<input id="pr-main" type="number" min="0" step="1" style="width:90px"> /month</label>
-      <label class="muted">Basic screen (ads only) $<input id="pr-basic" type="number" min="0" step="1" style="width:90px"> /month</label>
-      <button class="btn small" id="pr-save">Save prices</button>
-      <span class="muted" id="pr-note"></span>
-    </div>
-  </div>
-
-  <h2 style="display:flex;align-items:center;gap:14px">Invoices
-    <span style="flex:1"></span>
-    <span class="row" style="font-weight:400">
-      <input type="month" id="inv-period">
-      <button class="btn small" id="inv-generate">Generate invoices</button>
-    </span>
-  </h2>
-  <div class="row" id="inv-filters" style="margin-bottom:10px">
-    <button class="chip on" data-filter="all">All</button>
-    <button class="chip" data-filter="draft">Draft</button>
-    <button class="chip" data-filter="sent">Sent</button>
-    <button class="chip" data-filter="paid">Paid</button>
-  </div>
-  <table id="inv-table"></table>
-
-  <h2 style="display:flex;align-items:center;gap:14px">Current usage
-    <span style="flex:1"></span>
-    <button class="btn small secondary" id="usage-csv" style="font-weight:400">⬇ Usage CSV</button>
-  </h2>
-  <table id="usage-table"></table>
-</main>
+<main id="view"></main>
 <script src="billing.js"></script>
 </body>
 </html>
