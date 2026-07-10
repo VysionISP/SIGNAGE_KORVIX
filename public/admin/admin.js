@@ -725,6 +725,7 @@
           desc: row.querySelector('[data-mn-idesc]').value.trim(),
           price: row.querySelector('[data-mn-iprice]').value.trim(),
           sold_out: row.querySelector('[data-mn-isold]').checked,
+          featured: row.querySelector('[data-mn-ifeat]').checked,
           photo: row.querySelector('[data-mn-iphoto]').value || null,
         })).filter((i) => i.name),
       })),
@@ -743,6 +744,9 @@
       <input data-mn-iname placeholder="Item — e.g. Chicken Schnitzel" value="${esc(item.name || '')}" style="flex:2;min-width:140px">
       <input data-mn-idesc placeholder="Description (optional)" value="${esc(item.desc || '')}" style="flex:3;min-width:120px">
       <input data-mn-iprice type="number" step="0.5" placeholder="$" value="${item.price ?? ''}" style="width:84px">
+      <label style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap"
+        title="Featured items show as a big hero card with a large photo at the top of the board">
+        <input type="checkbox" data-mn-ifeat ${item.featured ? 'checked' : ''}>⭐</label>
       <label style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap">
         <input type="checkbox" data-mn-isold ${item.sold_out ? 'checked' : ''}>sold out</label>
       <button class="btn small danger" data-mn-delitem>✕</button>
@@ -853,9 +857,9 @@
       }
     };
 
-    // Sold-out ticks and theme changes save immediately.
+    // Sold-out ticks, featured stars and theme changes save immediately.
     $('#tab-menus').onchange = async (e) => {
-      if (!e.target.matches('[data-mn-isold]') && !e.target.matches('[data-mn-theme]')) return;
+      if (!e.target.matches('[data-mn-isold]') && !e.target.matches('[data-mn-theme]') && !e.target.matches('[data-mn-ifeat]')) return;
       const card = e.target.closest('[data-mn-card]');
       if (card) await api('PATCH', `/api/menus/${card.dataset.mnCard}`, menuFromDom(card));
     };

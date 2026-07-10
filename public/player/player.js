@@ -436,7 +436,32 @@
     const price = (p) => p == null ? '' : '$' + Number(p).toFixed(2).replace(/\.00$/, '');
     const logo = manifest.venue.logo
       ? `<img src="${esc(manifest.venue.logo)}" style="max-height:9vh;max-width:26vw;object-fit:contain;margin-bottom:1vh">` : '';
-    const sectionsHtml = menu.sections.map((section) => `
+
+    // Featured items break out into a hero strip under the title: big photo,
+    // big price, FEATURED tag in the theme accent. They leave the list flow.
+    const featured = menu.sections.flatMap((s) => s.items.filter((i) => i.featured)).slice(0, 3);
+    const heroHtml = featured.length ? `
+      <div style="display:flex;gap:2vw;width:100%;margin-bottom:2.6vh">
+        ${featured.map((item) => `
+        <div style="flex:1;max-width:${featured.length === 1 ? '46vw' : '30vw'};margin:0 auto;text-align:left;
+          border:.15vw solid ${T.section};border-radius:1vw;overflow:hidden;${item.sold_out ? 'opacity:.5;' : ''}
+          box-shadow:0 .8vh 2.5vh rgba(0,0,0,.35)">
+          ${item.photo ? `<img src="${esc(item.photo)}" style="width:100%;height:${featured.length === 1 ? '26vh' : '20vh'};object-fit:cover;display:block">` : ''}
+          <div style="padding:1.2vh 1.2vw 1.5vh">
+            <div style="font-size:1.15vw;font-weight:800;letter-spacing:.25em;color:${T.section};${T.sectionExtra || ''}">★ FEATURED${item.sold_out ? ' · SOLD OUT' : ''}</div>
+            <div style="display:flex;align-items:baseline;gap:1vw;margin-top:.5vh">
+              <span style="font-size:2.5vw;font-weight:800;${item.sold_out ? 'text-decoration:line-through;' : ''}">${esc(item.name)}</span>
+              <span style="flex:1"></span>
+              <span style="font-size:2.6vw;font-weight:900;color:${T.section};font-variant-numeric:tabular-nums">${price(item.price)}</span>
+            </div>
+            ${item.desc ? `<div style="font-size:1.5vw;color:${T.muted};margin-top:.3vh">${esc(item.desc)}</div>` : ''}
+          </div>
+        </div>`).join('')}
+      </div>` : '';
+
+    const sectionsHtml = menu.sections.map((section) => ({
+      ...section, items: section.items.filter((i) => !i.featured),
+    })).filter((section) => section.items.length).map((section) => `
       <div style="break-inside:avoid;margin-bottom:2.6vh;text-align:left">
         <div style="font-size:2.4vw;font-weight:800;letter-spacing:.14em;color:${T.section};border-bottom:${T.rule};padding-bottom:.6vh;margin-bottom:1.2vh;text-transform:uppercase;${T.sectionExtra || ''}">${esc(section.title)}</div>
         ${section.items.map((item) => `
@@ -457,6 +482,7 @@
     return `<div class="widget" style="background:${T.bg};color:${T.text};font-family:${T.font};justify-content:flex-start;padding:3vh 4vw;${T.frame || ''}">
       ${logo}
       <div style="font-size:3.6vw;font-weight:900;letter-spacing:.2em;text-transform:uppercase;margin-bottom:2.4vh;border-bottom:${T.titleRule};padding-bottom:1vh;width:100%;text-align:center;color:${T.name};${T.nameExtra || ''}">${esc(menu.name)}</div>
+      ${heroHtml}
       <div style="columns:${cols};column-gap:3.5vw;width:100%;flex:1;overflow:hidden">${sectionsHtml}</div>
     </div>`;
   }

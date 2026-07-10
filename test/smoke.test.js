@@ -519,9 +519,10 @@ test('full venue lifecycle', async (t) => {
     // Theme + item photos + venue logo flow through to the player
     const themed = await api('PATCH', `/api/menus/${menuId}`, {
       theme: 'chalkboard',
-      sections: [{ title: 'Mains', items: [{ name: 'Schnitzel', price: 24.5, photo: '/uploads/schnitty.png' }] }],
+      sections: [{ title: 'Mains', items: [{ name: 'Schnitzel', price: 24.5, photo: '/uploads/schnitty.png', featured: true }] }],
     });
     assert.strictEqual(themed.data.theme, 'chalkboard');
+    assert.strictEqual(themed.data.sections[0].items[0].featured, true);
     const badTheme = await api('PATCH', `/api/menus/${menuId}`, { theme: 'neon-vaporwave' });
     assert.strictEqual(badTheme.data.theme, 'classic'); // unknown themes fall back
 

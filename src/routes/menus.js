@@ -28,6 +28,7 @@ function cleanSections(raw) {
       price: item.price === '' || item.price === null || item.price === undefined
         ? null : (Number.isFinite(Number(item.price)) ? Number(item.price) : null),
       sold_out: !!item.sold_out,
+      featured: !!item.featured,
       photo: item.photo ? String(item.photo).slice(0, 300) : null,
     })).filter((item) => item.name),
   })).filter((section) => section.title || section.items.length);
