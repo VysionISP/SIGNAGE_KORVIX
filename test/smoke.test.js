@@ -1630,3 +1630,29 @@ test('licensing v2: business profile, negotiated rates, comp, suspension', async
     assert.strictEqual(del.status, 200);
   });
 });
+
+// ---- Screen creation is a provider (licence) action --------------------------------
+
+test('screens are created only by the provider, with a licence', async (t) => {
+  let orgId, venueId, adminTok;
+
+  await t.test('org admins cannot add screens; superadmin adds with a tier', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'Screen Lock Group' });
+    orgId = org.data.id;
+    const venue = await api('POST', '/api/venues', { name: 'Locked Arms', org_id: orgId });
+    venueId = venue.data.id;
+    await api('POST', '/api/users', { email: 'admin@lockedarms.au', password: 'locked-pass-1', role: 'admin', org_id: orgId });
+    adminTok = (await api('POST', '/api/auth/login', { email: 'admin@lockedarms.au', password: 'locked-pass-1' })).data.token;
+
+    const denied = await api('POST', `/api/venues/${venueId}/screens`, { name: 'Freebie TV' }, adminTok);
+    assert.strictEqual(denied.status, 403);
+
+    const created = await api('POST', `/api/venues/${venueId}/screens`, { name: 'Bar TV', license: 'basic' });
+    assert.strictEqual(created.status, 201);
+    assert.strictEqual(created.data.license, 'basic');
+
+    // venue staff still run the screen day-to-day (rename, rotate, layout...)
+    const renamed = await api('PATCH', `/api/screens/${created.data.id}`, { name: 'Bar TV Front' }, adminTok);
+    assert.strictEqual(renamed.status, 200);
+  });
+});

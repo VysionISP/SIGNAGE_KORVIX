@@ -419,15 +419,12 @@
         <button class="btn small" id="ticker-save" style="margin-top:8px">Save ticker</button>
       </div>
 
-      <h2>Add screen</h2>
-      <div class="form-grid card">
-        <label>Name<input id="scr-name" placeholder="Bar LED Wall"></label>
-        <label>Zone<select id="scr-zone">
-          <option value="">— none —</option>
-          ${zones.map((z) => `<option value="${z.id}">${esc(z.name)}</option>`).join('')}
-        </select></label>
-        <label>Orientation<select id="scr-orient"><option>landscape</option><option>portrait</option></select></label>
-        <button class="btn" id="scr-add">Add screen</button>
+      <div class="card" style="margin-top:16px">
+        <div class="row">
+          <div class="muted">Screens are added with a licence${hasRole('superadmin')
+            ? ` — add them from the <a href="/billing/">billing console</a> (business → venue → add screen).`
+            : ' — contact your signage provider to add a screen to this venue.'}</div>
+        </div>
       </div>
 
       <h2>Zones</h2>
@@ -447,14 +444,6 @@
           || '<tr><td class="muted">No devices waiting to pair</td></tr>'}
       </tbody></table>`;
 
-    $('#scr-add').onclick = async () => {
-      const name = $('#scr-name').value.trim();
-      if (!name) return alert('Screen name required');
-      await api('POST', `/api/venues/${venueId}/screens`, {
-        name, zone_id: $('#scr-zone').value || null, orientation: $('#scr-orient').value,
-      });
-      render();
-    };
     $('#zone-add').onclick = async () => {
       const name = $('#zone-name').value.trim();
       if (!name) return;

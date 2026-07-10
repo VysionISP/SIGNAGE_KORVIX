@@ -235,15 +235,22 @@ route('GET', '/api/venues/:venueId/screens', (req, res, params) => {
   sendJson(res, 200, { screens: screens.map(withStatus) });
 });
 
+// Creating a screen creates a licence, so it's a provider action (billing
+// console). Venue staff manage everything about a screen except its
+// existence and its tier.
 route('POST', '/api/venues/:venueId/screens', async (req, res, params) => {
-  auth.assertVenue(req.user, params.venueId, 'editor');
+  auth.requireRole(req.user, 'superadmin');
+  if (!db.get('SELECT id FROM venues WHERE id = ?', params.venueId)) throw new HttpError(404, 'venue not found');
   const body = await readJson(req);
   required(body, 'name');
+  const license = body.license !== undefined && LICENSES.has(body.license) ? body.license : 'main';
   const screenId = db.id();
   db.run(
-    'INSERT INTO screens (id, venue_id, zone_id, name, orientation, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO screens (id, venue_id, zone_id, name, orientation, license, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     screenId, params.venueId, body.zone_id || null, body.name,
-    body.orientation === 'portrait' ? 'portrait' : 'landscape', db.now());
+    body.orientation === 'portrait' ? 'portrait' : 'landscape', license, db.now());
+  db.logEvent('screen.created', { venueId: params.venueId, screenId,
+    detail: `${body.name} (${license} licence)`, actor: actorOf(req) });
   sendJson(res, 201, withStatus(db.get('SELECT * FROM screens WHERE id = ?', screenId)));
 });
 

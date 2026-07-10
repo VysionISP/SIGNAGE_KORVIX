@@ -292,6 +292,15 @@
                 <td style="text-align:right"><select data-slic="${esc(s.id)}">${licenceOptions(s, usage.prices)}</select></td>
               </tr>`).join('')}
             </table>` : '<div class="muted" style="margin-top:8px;font-size:13px">No screens yet.</div>'}
+            <div class="row" style="margin-top:10px">
+              <input data-nsname="${esc(v.id)}" placeholder="New screen — e.g. Bar LED Wall" style="min-width:170px;flex:1">
+              <select data-nslic="${esc(v.id)}">
+                <option value="main">Main — ${money(usage.prices.main)}</option>
+                <option value="basic">Basic — ${money(usage.prices.basic)}</option>
+                <option value="comp">Comped — $0</option>
+              </select>
+              <button class="btn small" data-nsadd="${esc(v.id)}">＋ Add screen</button>
+            </div>
           </div>`).join('') || '<div class="card muted">No venues yet — add their first one below.</div>'}
           <div class="card">
             <div class="row">
@@ -492,6 +501,17 @@
     });
     document.querySelectorAll('[data-slic]').forEach((el) => {
       el.onchange = async () => { await api('PATCH', `/api/screens/${el.dataset.slic}`, { license: el.value }); load(); };
+    });
+    document.querySelectorAll('[data-nsadd]').forEach((el) => {
+      el.onclick = async () => {
+        const vid = el.dataset.nsadd;
+        const name = document.querySelector(`[data-nsname="${vid}"]`).value.trim();
+        if (!name) return alert('Give the screen a name.');
+        await api('POST', `/api/venues/${vid}/screens`, {
+          name, license: document.querySelector(`[data-nslic="${vid}"]`).value,
+        });
+        load();
+      };
     });
   }
 
