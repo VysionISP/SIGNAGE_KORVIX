@@ -492,7 +492,10 @@
         <div style="flex:1;max-width:${featured.length === 1 ? '46vw' : '30vw'};margin:0 auto;text-align:left;
           border:.15vw solid ${T.section};border-radius:1vw;overflow:hidden;${item.sold_out ? 'opacity:.5;' : ''}
           box-shadow:0 .8vh 2.5vh rgba(0,0,0,.35);display:flex;flex-direction:column">
-          ${item.photo ? `<img src="${esc(item.photo)}" style="width:100%;aspect-ratio:16/9;height:auto;object-fit:cover;object-position:center;display:block">` : ''}
+          ${item.photo ? `<div style="padding:1.2vh 1.2vw 0">
+            <img src="${esc(item.photo)}" style="width:100%;aspect-ratio:16/9;height:auto;object-fit:cover;object-position:center;display:block;
+              border-radius:.8vw;border:.12vw solid ${T.section}66;box-shadow:0 .5vh 1.8vh rgba(0,0,0,.45)">
+          </div>` : ''}
           <div style="padding:1.2vh 1.2vw 1.5vh">
             <div style="font-size:1.15vw;font-weight:800;letter-spacing:.25em;color:${T.section};${T.sectionExtra || ''}">★ FEATURED${item.sold_out ? ' · SOLD OUT' : ''}</div>
             <div style="display:flex;align-items:baseline;gap:1vw;margin-top:.5vh">
@@ -512,7 +515,7 @@
         <div style="font-size:2.4vw;font-weight:800;letter-spacing:.14em;color:${T.section};border-bottom:${T.rule};padding-bottom:.6vh;margin-bottom:1.2vh;text-transform:uppercase;${T.sectionExtra || ''}">${esc(section.title)}</div>
         ${section.items.map((item) => `
           <div style="margin-bottom:1.2vh;${item.sold_out ? 'opacity:.45' : ''};display:flex;gap:.9vw;align-items:flex-start">
-            ${item.photo ? `<img src="${esc(item.photo)}" style="width:6.5vh;height:6.5vh;object-fit:cover;border-radius:.8vh;flex-shrink:0;box-shadow:0 .3vh .8vh rgba(0,0,0,.35)">` : ''}
+            ${item.photo ? `<img src="${esc(item.photo)}" style="width:6.5vh;height:6.5vh;object-fit:cover;border-radius:.8vh;flex-shrink:0;border:.1vh solid ${T.section}66;box-shadow:0 .3vh .8vh rgba(0,0,0,.35)">` : ''}
             <div style="flex:1;min-width:0">
               <div style="display:flex;align-items:baseline;gap:.8vw">
                 <span style="font-size:1.9vw;font-weight:700;${item.sold_out ? 'text-decoration:line-through' : ''}">${esc(item.name)}</span>
