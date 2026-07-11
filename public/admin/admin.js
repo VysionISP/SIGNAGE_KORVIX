@@ -308,6 +308,27 @@
             <div class="muted">${v.screens_offline ? `⚠ ${v.screens_offline} offline · ` : ''}${v.screens_unpaired ? `${v.screens_unpaired} unpaired` : ''}&nbsp;</div>
           </div>`).join('')}
       </div>
+      ${(() => {
+        const live = (health.find((h) => h.id === venueId)?.screens || [])
+          .filter((s) => s.status === 'online' && s.device_key).slice(0, 8);
+        if (!live.length) return '';
+        return `<h2>Now showing — ${esc(venue().name)}</h2>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px">
+          ${live.map((s) => `
+          <div class="card" style="margin:0;padding:10px">
+            <div style="position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:8px;background:#000">
+              <iframe src="/player/?preview=${esc(s.device_key)}" scrolling="no"
+                style="width:1280px;height:720px;border:0;transform-origin:top left;position:absolute;top:0;left:0"
+                onload="(function(f){const fit=()=>{const w=f.parentElement.clientWidth;f.style.transform='scale('+(w/1280)+')';};fit();new ResizeObserver(fit).observe(f.parentElement)})(this)"></iframe>
+              <a href="/player/?preview=${esc(s.device_key)}" target="_blank" title="Open full preview"
+                style="position:absolute;inset:0"></a>
+            </div>
+            <div style="margin-top:8px;font-weight:600;font-size:13px">${esc(s.name)}
+              <span class="muted" style="font-weight:400">· live preview</span></div>
+          </div>`).join('')}
+        </div>`;
+      })()}
+
       <h2>Screens — ${esc(venue().name)}</h2>
       ${screenTable(health.find((h) => h.id === venueId)?.screens || [])}
       <div class="row" style="margin-top:16px">
@@ -327,18 +348,32 @@
 
   function screenTable(screens) {
     return `<table>
-      <thead><tr><th>Screen</th><th>Zone</th><th>Status</th><th>Last seen</th><th>Now playing</th></tr></thead>
+      <thead><tr><th>Screen</th><th>Zone</th><th>Status</th><th>Uptime 30d</th><th>Last seen</th><th>Now playing</th><th>Device</th></tr></thead>
       <tbody>${screens.map((s) => {
         let info = {};
         try { info = JSON.parse(s.player_info || '{}'); } catch { /* ignore */ }
+        const up = s.uptime_30d;
+        const upHtml = up == null ? '<span class="muted">—</span>'
+          : `<span style="color:${up >= 99 ? 'var(--ok, #4ade80)' : up >= 95 ? 'var(--warn)' : 'var(--bad)'};font-weight:700">${up}%</span>`;
+        const store = info.storage;
+        const storePct = store && store.quota_mb ? Math.round((store.used_mb / store.quota_mb) * 100) : null;
+        const device = [
+          info.version ? `v${esc(info.version)}` : '',
+          info.uptime_hours != null ? `up ${info.uptime_hours >= 48 ? Math.round(info.uptime_hours / 24) + 'd' : info.uptime_hours + 'h'}` : '',
+          storePct != null ? (storePct >= 90
+            ? `<span style="color:var(--bad);font-weight:700">⚠ storage ${storePct}%</span>`
+            : `storage ${storePct}%`) : '',
+        ].filter(Boolean).join(' · ');
         return `<tr>
           <td>${esc(s.name)} <span class="muted">${s.orientation === 'portrait' ? '▯' : '▭'}</span></td>
           <td class="muted">${esc(zoneName(s.zone_id))}</td>
           <td><span class="pill ${s.status}">${s.status}</span></td>
+          <td>${upHtml}</td>
           <td class="muted">${s.last_seen_at ? new Date(s.last_seen_at).toLocaleTimeString() : '—'}</td>
           <td class="muted">${esc(info.current_item || '')}${info.playlist ? ` <span style="opacity:.6">(${esc(info.playlist)})</span>` : ''}</td>
+          <td class="muted" style="font-size:12px">${device || '—'}</td>
         </tr>`;
-      }).join('') || '<tr><td class="muted" colspan="5">No screens yet</td></tr>'}</tbody></table>`;
+      }).join('') || '<tr><td class="muted" colspan="7">No screens yet</td></tr>'}</tbody></table>`;
   }
 
   function zoneName(zoneId) {

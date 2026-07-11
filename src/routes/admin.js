@@ -996,12 +996,46 @@ route('GET', '/api/billing/invoices/:id/print', (req, res, params) => {
 
 // ---- Fleet health & events ---------------------------------------------------
 
+// Uptime over a window, reconstructed from the screen.offline /
+// screen.recovered event trail (heartbeat-driven, one event per transition).
+// Returns a 0-100 percentage, or null for screens never paired in the window.
+function screenUptime(screen, fromMs, toMs = Date.now()) {
+  if (!screen.device_key && !screen.last_seen_at) return null;
+  const events = db.all(
+    `SELECT type, created_at FROM events
+     WHERE screen_id = ? AND type IN ('screen.offline', 'screen.recovered')
+     ORDER BY id`, screen.id);
+  // State at window start: the last transition before the window decides it.
+  let offline = false;
+  let cursor = fromMs;
+  let downMs = 0;
+  for (const e of events) {
+    const at = Date.parse(e.created_at);
+    if (at <= fromMs) { offline = e.type === 'screen.offline'; continue; }
+    if (at >= toMs) break;
+    if (e.type === 'screen.offline' && !offline) { offline = true; cursor = at; }
+    if (e.type === 'screen.recovered' && offline) { offline = false; downMs += at - cursor; }
+  }
+  // Currently offline (including "went dark and never recovered")
+  const status = screenStatus(screen);
+  if (offline) downMs += toMs - Math.max(cursor, fromMs);
+  else if (status === 'offline' && screen.last_seen_at) {
+    const since = Math.max(Date.parse(screen.last_seen_at), fromMs);
+    downMs += toMs - since;
+  }
+  const span = toMs - fromMs;
+  if (span <= 0) return null;
+  return Math.round(Math.min(100, Math.max(0, (1 - downMs / span) * 100)) * 10) / 10;
+}
+
 route('GET', '/api/health/overview', (req, res) => {
   const rows = req.user.role === 'superadmin'
     ? db.all('SELECT * FROM venues ORDER BY name')
     : db.all('SELECT * FROM venues WHERE org_id = ? ORDER BY name', req.user.org_id ?? '');
+  const monthAgo = Date.now() - 30 * 86400 * 1000;
   const venues = rows.map((v) => {
-    const screens = db.all('SELECT * FROM screens WHERE venue_id = ?', v.id).map(withStatus);
+    const screens = db.all('SELECT * FROM screens WHERE venue_id = ?', v.id)
+      .map((s) => ({ ...withStatus(s), uptime_30d: screenUptime(s, monthAgo) }));
     return {
       id: v.id,
       name: v.name,
@@ -1014,6 +1048,26 @@ route('GET', '/api/health/overview', (req, res) => {
     };
   });
   sendJson(res, 200, { venues, connected_players: sse.connectedKeys().length });
+});
+
+// Filterable audit trail for the billing console (superadmin). Business
+// filter matches venue-scoped events for that org's venues.
+route('GET', '/api/billing/audit', (req, res, params, url) => {
+  auth.requireRole(req.user, 'superadmin');
+  const q = (name) => (url.searchParams.get(name) || '').trim();
+  const limit = Math.min(500, Math.max(10, parseInt(url.searchParams.get('limit'), 10) || 200));
+  const where = [];
+  const args = [];
+  if (q('org_id')) { where.push('e.venue_id IN (SELECT id FROM venues WHERE org_id = ?)'); args.push(q('org_id')); }
+  if (q('actor')) { where.push('e.actor LIKE ?'); args.push(`%${q('actor')}%`); }
+  if (q('type')) { where.push('e.type LIKE ?'); args.push(`${q('type')}%`); }
+  if (q('q')) { where.push('(e.detail LIKE ? OR e.type LIKE ? OR e.actor LIKE ?)'); args.push(`%${q('q')}%`, `%${q('q')}%`, `%${q('q')}%`); }
+  const events = db.all(
+    `SELECT e.*, v.name AS venue_name FROM events e
+     LEFT JOIN venues v ON v.id = e.venue_id
+     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY e.id DESC LIMIT ?`, ...args, limit);
+  sendJson(res, 200, { events });
 });
 
 route('GET', '/api/events', (req, res) => {

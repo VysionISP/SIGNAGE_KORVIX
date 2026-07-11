@@ -104,7 +104,16 @@ npm test           # end-to-end smoke tests (boots a real server)
   30 minutes.
 - **Live preview.** Every paired screen has a 👁 Preview link in the dashboard
   that shows exactly what the screen is showing right now, without affecting
-  its online status.
+  its online status — and the Overview shows **"Now showing" tiles**: live
+  scaled previews of every online screen at the venue.
+- **Uptime & device health.** Each screen shows a 30-day uptime %
+  (reconstructed from the offline/recovery event trail — evidence when an
+  outage is disputed) plus player version, browser uptime and storage
+  pressure from heartbeats (screens past 90% storage get flagged). Players
+  self-heal: stalled videos are skipped, a wedged rotation force-advances,
+  and the app reloads itself nightly during the venue's sleep window.
+- **Audit log.** Every action carries who did it; the billing console has a
+  filterable audit page (by business, actor, event type, free text).
 - **One-click backup.** Overview → *Download backup* streams a consistent
   SQLite snapshot of the whole CMS (`GET /api/backup`).
 - **Raffle number draws.** Set up a draw with a ticket range (e.g. 1–200) and

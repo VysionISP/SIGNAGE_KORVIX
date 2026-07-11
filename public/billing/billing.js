@@ -23,6 +23,10 @@
   let venues = [];      // /api/venues (with screens)
   let filter = 'all';
   let bizId = null;     // null = overview, else business detail
+  let page = 'main';    // main (overview/business) | audit
+  let auditEvents = [];
+  let bizRecent = []; // last events for the open business page
+  const auditFilters = { org_id: '', actor: '', type: '', q: '' };
 
   async function api(method, path, body) {
     const res = await fetch(path, {
@@ -52,8 +56,18 @@
 
   function render() {
     if (bizId && !orgs.find((o) => o.id === bizId)) bizId = null;
-    $('#view').innerHTML = bizId ? bizHtml(bizId) : overviewHtml();
+    $('#view').innerHTML = page === 'audit' ? auditHtml() : (bizId ? bizHtml(bizId) : overviewHtml());
     bind();
+    document.querySelectorAll('#nav-overview, #nav-audit').forEach((a) => {
+      a.style.color = (a.id === 'nav-audit') === (page === 'audit') ? 'var(--accent)' : '';
+    });
+  }
+
+  async function loadAudit() {
+    const qs = new URLSearchParams(Object.entries(auditFilters).filter(([, v]) => v));
+    qs.set('limit', '200');
+    auditEvents = (await api('GET', `/api/billing/audit?${qs}`)).events;
+    render();
   }
 
   // ---- invoice rows (shared) --------------------------------------------------------
@@ -312,10 +326,51 @@
         </div>
       </div>
 
+      <h2 style="display:flex;align-items:center;gap:12px">Recent activity
+        <a href="#" class="crumb" id="biz-audit" style="font-weight:400;font-size:13px">full audit log ›</a></h2>
+      <table>
+        <tr><th>When</th><th>Event</th><th>Detail</th><th>Venue</th><th>Who</th></tr>
+        ${(bizRecent || []).map(auditRow).join('') || '<tr><td class="muted" colspan="5">No activity yet.</td></tr>'}
+      </table>
+
       <h2>Invoices — ${esc(org.name)}</h2>
       <table>
         <tr><th>Period</th><th class="num">Total</th><th>Status</th><th>Dates</th><th style="text-align:right">Actions</th></tr>
         ${invoiceRows(bizInvoices, { showBiz: false }) || '<tr><td class="muted" colspan="5">No invoices yet for this business.</td></tr>'}
+      </table>`;
+  }
+
+  // ---- audit log ------------------------------------------------------------------------
+
+  function auditRow(e) {
+    return `<tr>
+      <td class="muted" style="white-space:nowrap;font-size:12.5px">${new Date(e.created_at).toLocaleString('en-AU')}</td>
+      <td><code style="font-size:12px">${esc(e.type)}</code></td>
+      <td>${esc(e.detail || '')}</td>
+      <td class="muted">${esc(e.venue_name || '')}</td>
+      <td style="white-space:nowrap">${esc(e.actor || '')}</td>
+    </tr>`;
+  }
+
+  function auditHtml() {
+    return `
+      <h2 style="margin-top:0">Audit log</h2>
+      <p class="muted" style="margin-top:0">Every action across the platform with who did it — licence changes, invoices,
+      suspensions, games, logins. Venue-scoped events can be filtered by business.</p>
+      <div class="card" style="margin-bottom:14px"><div class="row">
+        <select id="au-org">
+          <option value="">All businesses</option>
+          ${orgs.map((o) => `<option value="${esc(o.id)}" ${auditFilters.org_id === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
+        </select>
+        <input id="au-actor" placeholder="Actor — e.g. dave@" value="${esc(auditFilters.actor)}" style="width:170px">
+        <input id="au-type" placeholder="Type — e.g. billing." value="${esc(auditFilters.type)}" style="width:150px">
+        <input id="au-q" placeholder="Search detail…" value="${esc(auditFilters.q)}" style="min-width:180px;flex:1">
+        <button class="btn small" id="au-apply">Filter</button>
+        <button class="btn small secondary" id="au-clear">Clear</button>
+      </div></div>
+      <table>
+        <tr><th>When</th><th>Event</th><th>Detail</th><th>Venue</th><th>Who</th></tr>
+        ${auditEvents.map(auditRow).join('') || '<tr><td class="muted" colspan="5">Nothing matches.</td></tr>'}
       </table>`;
   }
 
@@ -324,10 +379,40 @@
   function bind() {
     const on = (sel, fn) => { const el = $(sel); if (el) el.onclick = fn; };
 
+    on('#nav-overview', (e) => { e.preventDefault(); page = 'main'; bizId = null; render(); });
+    on('#nav-audit', (e) => { e.preventDefault(); page = 'audit'; loadAudit(); });
+    on('#au-apply', () => {
+      auditFilters.org_id = $('#au-org').value;
+      auditFilters.actor = $('#au-actor').value.trim();
+      auditFilters.type = $('#au-type').value.trim();
+      auditFilters.q = $('#au-q').value.trim();
+      loadAudit();
+    });
+    on('#au-clear', () => {
+      Object.keys(auditFilters).forEach((k) => { auditFilters[k] = ''; });
+      loadAudit();
+    });
+    const auQ = $('#au-q');
+    if (auQ) auQ.onkeydown = (e) => { if (e.key === 'Enter') $('#au-apply').click(); };
+
     document.querySelectorAll('[data-openbiz]').forEach((el) => {
-      el.onclick = () => { bizId = el.dataset.openbiz; render(); window.scrollTo(0, 0); };
+      el.onclick = async () => {
+        bizId = el.dataset.openbiz;
+        page = 'main';
+        bizRecent = [];
+        render();
+        window.scrollTo(0, 0);
+        bizRecent = (await api('GET', `/api/billing/audit?org_id=${encodeURIComponent(bizId)}&limit=30`)).events;
+        render();
+      };
     });
     on('#back', (e) => { e.preventDefault(); bizId = null; render(); });
+    on('#biz-audit', (e) => {
+      e.preventDefault();
+      auditFilters.org_id = bizId;
+      page = 'audit';
+      loadAudit();
+    });
 
     // overview
     on('#pr-save', async () => {

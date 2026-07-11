@@ -6,6 +6,7 @@
 // in localStorage and playback continues from cache until the CMS is back.
 
 (() => {
+  const PLAYER_VERSION = '2026.07.11';
   const HEARTBEAT_MS = 30 * 1000;
   const STORE_KEY = 'korvix.device_key';
   const MANIFEST_KEY = 'korvix.last_manifest';
@@ -54,12 +55,30 @@
     return res.json();
   }
 
+  // Storage pressure is polled hourly; TV browsers that fill their cache
+  // start dropping media, so the dashboard flags anything past 90%.
+  let storageInfo = null;
+  async function pollStorage() {
+    try {
+      if (!navigator.storage || !navigator.storage.estimate) return;
+      const est = await navigator.storage.estimate();
+      if (est && est.quota) {
+        storageInfo = { used_mb: Math.round((est.usage || 0) / 1048576), quota_mb: Math.round(est.quota / 1048576) };
+      }
+    } catch { /* not supported */ }
+  }
+  pollStorage();
+  setInterval(pollStorage, 60 * 60 * 1000);
+
   function playerInfo() {
     return {
       user_agent: navigator.userAgent,
       resolution: `${screen.width}x${screen.height}`,
       viewport: `${innerWidth}x${innerHeight}`,
       started_at: bootTime,
+      version: PLAYER_VERSION,
+      uptime_hours: Math.round(performance.now() / 3600000 * 10) / 10,
+      storage: storageInfo,
     };
   }
   const bootTime = new Date().toISOString();
@@ -309,6 +328,8 @@
     // Videos advance on 'ended'; the timer is a fallback for stalled loads.
     const fallback = item.type === 'video' ? Math.max(secs, 300) : secs;
     advanceTimer = setTimeout(nextItem, fallback * 1000);
+    lastAdvanceAt = Date.now();
+    lastAdvanceBudget = fallback;
   }
 
   function buildLayer(item) {
@@ -359,6 +380,50 @@
     clearTimeout(advanceTimer);
     advanceTimer = setTimeout(nextItem, 500);
   }
+
+  // ---- self-healing watchdog ----------------------------------------------------
+  // Signage runs unattended for months: if a video decoder wedges, a timer is
+  // lost to a background-tab freeze, or the app has simply been up for a week,
+  // recover without anyone climbing a ladder.
+
+  let lastAdvanceAt = Date.now();
+  let lastAdvanceBudget = 60;
+  let lastMaintenanceReload = 0;
+
+  setInterval(() => {
+    // 1. Stalled video: playing but the clock isn't moving.
+    const video = currentLayer && currentLayer.querySelector('video');
+    if (video && !video.paused && !video.ended) {
+      if (video._wdLastTime !== undefined && video.currentTime === video._wdLastTime) {
+        video._wdStalls = (video._wdStalls || 0) + 1;
+        if (video._wdStalls >= 2) { // ~20s frozen
+          console.warn('[watchdog] video stalled — skipping');
+          skipBroken();
+        }
+      } else {
+        video._wdStalls = 0;
+      }
+      video._wdLastTime = video.currentTime;
+    }
+
+    // 2. Rotation wedged: far past the slide's own timer with no advance.
+    if (playableItems().length > 1
+      && Date.now() - lastAdvanceAt > (lastAdvanceBudget * 3 + 90) * 1000) {
+      console.warn('[watchdog] rotation stalled — advancing');
+      nextItem();
+    }
+
+    // 3. Maintenance reload: once a day while the venue sleeps (screen is
+    // black anyway), or unconditionally after a week of uptime — clears any
+    // slow leak in the TV browser.
+    const upHours = performance.now() / 3600000;
+    const asleep = $('sleep').style.display === 'flex';
+    const sinceReload = Date.now() - lastMaintenanceReload;
+    if (!previewKey && ((asleep && upHours > 12 && sinceReload > 12 * 3600000) || upHours > 24 * 7)) {
+      lastMaintenanceReload = Date.now();
+      location.reload();
+    }
+  }, 10 * 1000);
 
   // ---- widgets (render live integration feeds) --------------------------------
 

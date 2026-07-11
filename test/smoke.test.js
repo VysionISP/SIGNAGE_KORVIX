@@ -1656,3 +1656,70 @@ test('screens are created only by the provider, with a licence', async (t) => {
     assert.strictEqual(renamed.status, 200);
   });
 });
+
+// ---- Fleet health: uptime + audit log ----------------------------------------------
+
+test('fleet health: 30-day uptime from the event trail; billing audit log', async (t) => {
+  const db = require('../src/db');
+  let orgId, venueId, screenId;
+
+  await t.test('uptime reconstructs from offline/recovered events', async () => {
+    const org = await api('POST', '/api/orgs', { name: 'Uptime Group' });
+    orgId = org.data.id;
+    const venue = await api('POST', '/api/venues', { name: 'Uptime Hotel', org_id: orgId });
+    venueId = venue.data.id;
+    const screen = await api('POST', `/api/venues/${venueId}/screens`, { name: 'Uptime TV' });
+    screenId = screen.data.id;
+    const hello = await api('POST', '/api/player/hello', {});
+    await api('POST', `/api/screens/${screenId}/pair`, { pairing_code: hello.data.pairing_code });
+    await api('POST', `/api/player/${hello.data.device_key}/heartbeat`, {});
+
+    // Synthetic outage: 3 days offline within the last 30 days = 90% uptime.
+    const daysAgo = (n) => new Date(Date.now() - n * 86400 * 1000).toISOString();
+    db.run('INSERT INTO events (venue_id, screen_id, type, detail, created_at) VALUES (?, ?, ?, ?, ?)',
+      venueId, screenId, 'screen.offline', 'Uptime TV', daysAgo(10));
+    db.run('INSERT INTO events (venue_id, screen_id, type, detail, created_at) VALUES (?, ?, ?, ?, ?)',
+      venueId, screenId, 'screen.recovered', 'Uptime TV', daysAgo(7));
+
+    const health = await api('GET', '/api/health/overview');
+    const s = health.data.venues.find((v) => v.id === venueId).screens.find((x) => x.id === screenId);
+    assert.ok(s.uptime_30d >= 89.5 && s.uptime_30d <= 90.5, `expected ~90, got ${s.uptime_30d}`);
+  });
+
+  await t.test('audit log: filterable, superadmin-only', async () => {
+    const all = await api('GET', '/api/billing/audit?limit=50');
+    assert.strictEqual(all.status, 200);
+    assert.ok(all.data.events.length > 0);
+    assert.ok(all.data.events[0].created_at);
+
+    // business filter only returns that org's venue events
+    const scoped = await api('GET', `/api/billing/audit?org_id=${orgId}`);
+    assert.ok(scoped.data.events.length >= 2); // offline + recovered (+ pairing etc.)
+    assert.ok(scoped.data.events.every((e) => e.venue_name === 'Uptime Hotel'));
+
+    // type + actor filters
+    const typed = await api('GET', '/api/billing/audit?type=screen.');
+    assert.ok(typed.data.events.every((e) => e.type.startsWith('screen.')));
+    const byActor = await api('GET', '/api/billing/audit?actor=noc@korvix.au&limit=20');
+    assert.ok(byActor.data.events.every((e) => (e.actor || '').includes('noc@korvix.au')));
+
+    // org admins are locked out
+    await api('POST', '/api/users', { email: 'admin@uptime.au', password: 'uptime-pass-1', role: 'admin', org_id: orgId });
+    const tok = (await api('POST', '/api/auth/login', { email: 'admin@uptime.au', password: 'uptime-pass-1' })).data.token;
+    const denied = await api('GET', '/api/billing/audit', undefined, tok);
+    assert.strictEqual(denied.status, 403);
+  });
+
+  await t.test('heartbeat carries device health (version/uptime/storage)', async () => {
+    const hello = await api('POST', '/api/player/hello', {});
+    const s2 = await api('POST', `/api/venues/${venueId}/screens`, { name: 'Device TV' });
+    await api('POST', `/api/screens/${s2.data.id}/pair`, { pairing_code: hello.data.pairing_code });
+    await api('POST', `/api/player/${hello.data.device_key}/heartbeat`, {
+      player_info: { version: '2026.07.11', uptime_hours: 5.5, storage: { used_mb: 950, quota_mb: 1000 } },
+    });
+    const screens = (await api('GET', `/api/venues/${venueId}/screens`)).data.screens;
+    const info = JSON.parse(screens.find((x) => x.id === s2.data.id).player_info);
+    assert.strictEqual(info.version, '2026.07.11');
+    assert.strictEqual(info.storage.used_mb, 950);
+  });
+});
