@@ -758,7 +758,10 @@
       if (hint) hint.style.display = 'block';
     };
     dropzone.onclick = () => dzInput.click();
-    dzInput.onchange = () => handleFiles(dzInput.files);
+    dzInput.onchange = async () => {
+      await handleFiles(dzInput.files);
+      dzInput.value = ''; // same file can be picked again (change fires next time)
+    };
     dropzone.ondragover = (e) => { e.preventDefault(); dropzone.style.borderColor = 'var(--accent)'; };
     dropzone.ondragleave = () => { dropzone.style.borderColor = 'var(--line)'; };
     dropzone.ondrop = (e) => {
@@ -827,17 +830,30 @@
       }
     };
 
-    // Tick-boxes: on = add to that playlist, off = pull it out. Instant.
+    // Tick-boxes: on = add to that playlist, off = pull it out. Works from
+    // FRESH server state (never the ids captured at render time), so rapid
+    // clicks can't double-add, and unticking always finds the real item —
+    // including any duplicates from the past.
     $('#tab-content').onchange = async (e) => {
       const toggle = e.target.closest('[data-toggle]');
       if (!toggle) return;
-      whereOpen.add(toggle.dataset.toggle);
-      if (toggle.checked) {
-        await api('POST', `/api/playlists/${toggle.dataset.pl}/items`, { media_id: toggle.dataset.toggle });
-      } else if (toggle.dataset.item) {
-        await api('DELETE', `/api/playlist-items/${toggle.dataset.item}`);
+      const mediaId = toggle.dataset.toggle;
+      const playlistId = toggle.dataset.pl;
+      const wantOn = toggle.checked;
+      whereOpen.add(mediaId);
+      toggle.disabled = true;
+      try {
+        const fresh = (await api('GET', `/api/venues/${venueId}/playlists`)).playlists
+          .find((p) => p.id === playlistId);
+        const hits = fresh ? fresh.items.filter((i) => i.media_id === mediaId) : [];
+        if (wantOn && !hits.length) {
+          await api('POST', `/api/playlists/${playlistId}/items`, { media_id: mediaId });
+        } else if (!wantOn) {
+          for (const hit of hits) await api('DELETE', `/api/playlist-items/${hit.id}`);
+        }
+      } finally {
+        render();
       }
-      render();
     };
   }
 
